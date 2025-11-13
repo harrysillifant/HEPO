@@ -1,13 +1,9 @@
 import gymnasium as gym
-import torch
-from stable_baselines3 import PPO
-from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.buffers import RolloutBuffer
-from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
-from stable_baselines3.common.schedules import FloatSchedule
-from utils import HEPO
+from policy import HEPO
+from custom_env import RewardSplitWrapper
 
-vec_env = make_vec_env("LunarLander-v3", n_envs=4)
+env = gym.make("LunarLander-v3")
+env = RewardSplitWrapper(env)
 
 
 """
