@@ -1,101 +1,99 @@
-import torch as torch
-import torch.nn as nn
-import torch.nn.functional as F
-from stable_baselines3 import PPO
-from stable_baselines3.common.policies import ActorCriticPolicy
-
-# 1) custom policy that contains an auxiliary head
+import torch
+from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
 
 
-class AuxActorCriticPolicy(ActorCriticPolicy):
-    def __init__(self, *args, aux_hidden_dim: int = 64, **kwargs):
-        # call parent: it will build feature extractor / mlp_extractor etc.
-        super().__init__(*args, **kwargs)
+class HEPO:
+    def __init__(self, policy, env1, env2):
+        self.pi = OnPolicyAlgorithm(policy=policy, env=env1)
+        self.pi_ref = OnPolicyAlgorithm(policy=policy, env=env2)
 
-        # features_dim is created by parent during setup
-        # create a small MLP for the auxiliary objective
-        self.aux_net = nn.Sequential(
-            nn.Linear(self.features_dim, aux_hidden_dim),
-            nn.ReLU(),
-            # adjust output shape to your aux target
-            nn.Linear(aux_hidden_dim, 1),
+    def collect_rollouts(self, callback1=None, callback2=None):
+        """
+        Generate two buffers
+        """
+        self.pi.collect_rollouts(
+            self.pi.env,
+            callback1,
+            self.pi.rollout_buffer,
+            n_rollout_steps=self.pi.n_steps,
         )
+        self.pi_ref.collect_rollouts(
+            self.pi_ref,
+            callback2,
+            self.pi_ref.rollout_buffer,
+            n_rollout_steps=self.pi_ref.n_steps,
+        )
+        # Now self.pi.rollout_buffer and self.pi_ref.rollout_buffer are filled up
+        # combine rollouts into single buffer
 
-    def get_aux(self, obs: torch.Tensor) -> torch.Tensor:
-        """
-        Return the auxiliary prediction for the given observations.
-        obs shape: (batch, *obs_shape) in SB3 convention
-        """
-        # extract features using the policy's extractor (works for SB3 policies)
-        features = self.extract_features(obs)
-        return self.aux_net(features).squeeze(-1)  # shape (batch,)
+    def train_pi(self):
+        # Train pi on a collection
+        self.pi.policy.set_training_mode(True)
 
+        self.pi._update_learning_rate(self.pi.policy.optimizer)
 
-# 2) subclass PPO and override train() to include aux loss
+        pi_clip_range = self.pi.clip_range(self.pi._current_progress_remaining)
 
-
-class PPOWithAux(PPO):
-    def __init__(self, *args, aux_coef: float = 1.0, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.aux_coef = aux_coef
-
-    def train(self) -> None:
-        # mostly the same as SB3 PPO.train(); we compute an extra aux_loss and add it
-        self._update_learning_rate(self.policy.optimizer)
-        clip_range = self.clip_range(self._current_progress_remaining)
-        if self.clip_range_vf is not None:
-            clip_range_vf = self.clip_range_vf(self._current_progress_remaining)
-
-        # bookkeeping for logging (optional)
-        entropy_losses, pg_losses, value_losses, aux_losses = [], [], [], []
-        clip_fractions = []
-
+        if self.pi.clip_range_vf is not None:
+            pi_clip_range_vf = self.pi.clip_range_vf(
+                self.pi._current_progress_remaining
+            )
+        pi_entropy_losses = []
+        pi_pg_losses, pi_value_losses = [], []
+        pi_clip_fractions = []
+        continue_training = True
         for epoch in range(self.n_epochs):
             approx_kl_divs = []
-            for rollout_data in self.rollout_buffer.get(self.batch_size):
-                actions = rollout_data.actions
-                if isinstance(self.action_space, __import__("gym").spaces.Discrete):
-                    actions = actions.long().flatten()
+            for pi_rollout_data in self.pi.rollout_buffer.get(batch_size):
+                pi_actions = pi_rollout_data.actions, pi_ref_rollout_data.actions
 
-                if self.use_sde:
-                    self.policy.reset_noise(self.batch_size)
-
-                # main eval (actor / critic)
-                values, log_prob, entropy = self.policy.evaluate_actions(
-                    rollout_data.observations, actions
+                pi_values, pi_log_prob, pi_entropy = self.pi.policy.evaluate_actions(
+                    pi_rollout_data.observations, pi_actions
                 )
-                values = values.flatten()
+                pi_values = pi_values.flatten()
 
-                advantages = rollout_data.advantages
-                advantages = (advantages - advantages.mean()) / (
-                    advantages.std() + 1e-8
+                pi_advantages = (
+                    pi_rollout_data.advantages
+                )  # advantages of pi on task rewards
+
+                # pi_advantages = (1+self.alpha) * pi_rollout_data.advantages + self.alpha * pi_ref_rollout_data.advantages # involves advantages for pi policy on both
+
+                if self.normalize_advantage and len(advantages) > 1:
+                    pi_advantages = (pi_advantages - pi_advantages.mean()) / (
+                        pi_advantages.std() + 1e-8
+                    )
+
+                # ratio between old and new policy, should be one at the first iteration
+                pi_ratio = th.exp(pi_log_prob - pi_rollout_data.old_log_prob)
+
+                pi_policy_loss_1 = pi_advantages * pi_ratio
+                pi_policy_loss_2 = pi_advantages * th.clamp(
+                    pi_ratio, 1 - clip_range, 1 + clip_range
                 )
+                pi_policy_loss = - \
+                    th.min(pi_policy_loss_1, pi_policy_loss_2).mean()
 
-                ratio = torch.exp(log_prob - rollout_data.old_log_prob)
+                pi_pg_losses.append(pi_policy_loss.item())
+                pi_clip_fraction = th.mean(
+                    (th.abs(pi_ratio - 1) > pi_clip_range).float()
+                ).item()
+                pi_clip_fractions.append(pi_clip_fraction)
 
-                # clipped surrogate
-                policy_loss_1 = advantages * ratio
-                policy_loss_2 = advantages * torch.clamp(
-                    ratio, 1 - clip_range, 1 + clip_range
-                )
-                policy_loss = -torch.min(policy_loss_1, policy_loss_2).mean()
-                pg_losses.append(policy_loss.item())
-
-                clip_fractions.append(
-                    torch.mean((torch.abs(ratio - 1) > clip_range).float()).item()
-                )
-
-                # value loss
                 if self.clip_range_vf is None:
+                    # No clipping
                     values_pred = values
                 else:
-                    values_pred = rollout_data.old_values + torch.clamp(
+                    # Clip the difference between old and new value
+                    # NOTE: this depends on the reward scaling
+                    values_pred = rollout_data.old_values + th.clamp(
                         values - rollout_data.old_values, -clip_range_vf, clip_range_vf
                     )
-                value_loss = F.mse_loss(rollout_data.returns, values_pred)
+
+                value_loss = F.mse_loss(
+                    rollout_data.returns, values_pred
+                )  # compute new value loss here
                 value_losses.append(value_loss.item())
 
-                # entropy
                 if entropy is None:
                     entropy_loss = -torch.mean(-log_prob)
                 else:
@@ -103,49 +101,189 @@ class PPOWithAux(PPO):
 
                 entropy_losses.append(entropy_loss.item())
 
-                # ---- YOUR AUXILIARY LOSS ----
-                # compute your auxiliary prediction from the policy and an aux target.
-                # You must decide where aux_target comes from (rollout_buffer, obs, next_obs, etc.).
-                # Example placeholder: predict a scalar target stored in rollout_data (you'll likely need to extend the buffer)
-                # Replace the next line with your actual aux target construction:
-                # aux_target = rollout_data.aux_target  # <-- depends on how you store it
-                #
-                # For demo, let's assume target is zeros of correct shape:
-                aux_pred = self.policy.get_aux(rollout_data.observations)  # (batch,)
-                # <-- replace with your real target
-                aux_target = torch.zeros_like(aux_pred)
-                aux_loss = F.mse_loss(aux_pred, aux_target)
-                aux_losses.append(aux_loss.item())
-
-                # total loss: actor + entropy + value + aux
                 loss = (
                     policy_loss
                     + self.ent_coef * entropy_loss
                     + self.vf_coef * value_loss
-                    + self.aux_coef * aux_loss
-                )
+                )  # compute new loss here
 
-                # optimization step (same as SB3)
-                self.policy.optimizer.zero_grad()
+                with th.no_grad():
+                    log_ratio = log_prob - rollout_data.old_log_prob
+                    approx_kl_div = (
+                        th.mean((th.exp(log_ratio) - 1) -
+                                log_ratio).cpu().numpy()
+                    )
+                    approx_kl_divs.append(approx_kl_div)
+
+                if self.target_kl is not None and approx_kl_div > 1.5 * self.target_kl:
+                    continue_training = False
+                    if self.verbose >= 1:
+                        print(
+                            f"Early stopping at step {
+                                epoch} due to reaching max kl: {approx_kl_div:.2f}"
+                        )
+                    break
+
+                self.pi.policy.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(
-                    self.policy.parameters(), self.max_grad_norm
+                    self.pi.policy.parameters(), self.max_grad_norm
                 )
-                self.policy.optimizer.step()
+                self.pi.policy.optimizer.step()
 
-                approx_kl_divs.append(
-                    torch.mean(rollout_data.old_log_prob - log_prob)
-                    .detach()
-                    .cpu()
-                    .numpy()
-                )
-
-            if (
-                self.target_kl is not None
-                and np.mean(approx_kl_divs) > 1.5 * self.target_kl
-            ):
+            self._n_updates += 1
+            if not continue_training:
                 break
 
-        # log some custom metrics
-        # (SB3 logger functions can be used here, e.g. logger.record)
-        # e.g. logger.record("train/aux_loss", np.mean(aux_losses))
+    def train_pi_ref(self):
+        # Train pi on a collection
+        self.pi_ref.policy.set_training_mode(True)
+
+        self.pi_ref._update_learning_rate(self.pi_ref.policy.optimizer)
+
+        pi_ref_clip_range = self.pi.clip_range(
+            self.pi_ref._current_progress_remaining)
+
+        if self.pi_ref.clip_range_vf is not None:
+            pi_ref_clip_range_vf = self.pi_ref.clip_range_vf(
+                self.pi_ref._current_progress_remaining
+            )
+        pi_ref_entropy_losses = []
+        pi_ref_pg_losses, pi_ref_value_losses = [], []
+        pi_ref_clip_fractions = []
+        continue_training = True
+        for epoch in range(self.n_epochs):
+            approx_kl_divs = []
+            for pi_ref_rollout_data in self.pi.rollout_buffer.get(batch_size):
+                pi_ref_actions = pi_ref_rollout_data.actions
+
+                pi_values, pi_log_prob, pi_entropy = self.pi.policy.evaluate_actions(
+                    pi_rollout_data.observations, pi_actions
+                )
+                pi_values = pi_values.flatten()
+
+                pi_advantages = (
+                    pi_rollout_data.advantages
+                )  # advantages of pi on task rewards
+
+                # pi_advantages = (1+self.alpha) * pi_rollout_data.advantages + self.alpha * pi_ref_rollout_data.advantages # involves advantages for pi policy on both
+
+                if self.normalize_advantage and len(advantages) > 1:
+                    pi_advantages = (pi_advantages - pi_advantages.mean()) / (
+                        pi_advantages.std() + 1e-8
+                    )
+
+                # ratio between old and new policy, should be one at the first iteration
+                pi_ratio = th.exp(pi_log_prob - pi_rollout_data.old_log_prob)
+
+                pi_policy_loss_1 = pi_advantages * pi_ratio
+                pi_policy_loss_2 = pi_advantages * th.clamp(
+                    pi_ratio, 1 - clip_range, 1 + clip_range
+                )
+                pi_policy_loss = - \
+                    th.min(pi_policy_loss_1, pi_policy_loss_2).mean()
+
+                pi_pg_losses.append(pi_policy_loss.item())
+                pi_clip_fraction = th.mean(
+                    (th.abs(pi_ratio - 1) > pi_clip_range).float()
+                ).item()
+                pi_clip_fractions.append(pi_clip_fraction)
+
+                if self.clip_range_vf is None:
+                    # No clipping
+                    values_pred = values
+                else:
+                    # Clip the difference between old and new value
+                    # NOTE: this depends on the reward scaling
+                    values_pred = rollout_data.old_values + th.clamp(
+                        values - rollout_data.old_values, -clip_range_vf, clip_range_vf
+                    )
+
+                value_loss = F.mse_loss(
+                    rollout_data.returns, values_pred
+                )  # compute new value loss here
+                value_losses.append(value_loss.item())
+
+                if entropy is None:
+                    entropy_loss = -torch.mean(-log_prob)
+                else:
+                    entropy_loss = -torch.mean(entropy)
+
+                entropy_losses.append(entropy_loss.item())
+
+                loss = (
+                    policy_loss
+                    + self.ent_coef * entropy_loss
+                    + self.vf_coef * value_loss
+                )  # compute new loss here
+
+                with th.no_grad():
+                    log_ratio = log_prob - rollout_data.old_log_prob
+                    approx_kl_div = (
+                        th.mean((th.exp(log_ratio) - 1) -
+                                log_ratio).cpu().numpy()
+                    )
+                    approx_kl_divs.append(approx_kl_div)
+
+                if self.target_kl is not None and approx_kl_div > 1.5 * self.target_kl:
+                    continue_training = False
+                    if self.verbose >= 1:
+                        print(
+                            f"Early stopping at step {
+                                epoch} due to reaching max kl: {approx_kl_div:.2f}"
+                        )
+                    break
+
+                self.pi.policy.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    self.pi.policy.parameters(), self.max_grad_norm
+                )
+                self.pi.policy.optimizer.step()
+
+            self._n_updates += 1
+            if not continue_training:
+                break
+
+    def learn(self):
+        """
+        Train both policies,
+        """
+        total_timesteps, callback = self._setup_learn(
+            total_timesteps,
+            callback,
+            reset_num_timesteps,
+            tb_log_name,
+            progress_bar,
+        )
+
+        assert self.env1 is not None and self.env2 is not None
+
+        while self.num_timesteps < total_timesteps:
+            continue_training = self.collect_rollouts()
+
+            if not continue_training:
+                break
+
+            iteration += 1
+
+            # self._update_current
+
+            if log_interval is not None and iteration % log_interval == 0:
+                # assert self.ep_info_buffer is not None
+                self.dump_logs(iteration)
+
+            self.train_pi()
+            self.train_pi_ref()
+
+        # callback.on_training_end()
+
+        return self
+
+
+class HEPOBuffer:
+    def __init__():
+        pass
+
+    def __getitem__():
+        pass
