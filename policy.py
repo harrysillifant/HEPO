@@ -39,8 +39,14 @@ class HEPO:
                 self._current_progress_remaining)  # type: ignore[operator]
 
         entropy_losses = []
-        pg_losses, value_losses = [], []
-        clip_fractions = []
+        pi_pg_losses = []
+        pi_H_pg_losses = []
+        pi_value_task_losses = []
+        pi_value_heuristic_losses = []
+        pi_value_task__losses = []
+        pi_value_heuristic_losses = []
+        pi_clip_fractions = []
+        pi_H_clip_fractions = []
 
         continue_training = True
         # train for n_epochs epochs
@@ -62,6 +68,7 @@ class HEPO:
                 values, log_prob, entropy = self.policy.evaluate_actions(
                     rollout_data.observations, actions
                 )
+
                 values = values.flatten()
 
                 # Normalize advantage
@@ -71,7 +78,11 @@ class HEPO:
                 pi_H_heuristic_advantages = pi_H_rollout_data.heuristic_advantages
 
                 # Normalization does not make sense if mini batchsize == 1, see GH issue #325
-                if self.normalize_advantage and len(advantages) > 1:
+                if (
+                    self.normalize_advantage
+                    and len(pi_task_advantages) > 1
+                    and len(pi_H_task_advantages) > 1
+                ):
                     pi_task_advantages = (
                         pi_task_advantages - pi_task_advantages.mean()
                     ) / (pi_task_advantages.std() + 1e-8)
@@ -116,10 +127,16 @@ class HEPO:
                     torch.min(pi_H_policy_loss_1, pi_H_policy_loss_2)
 
                 # Logging
-                pg_losses.append(policy_loss.item())
-                clip_fraction = th.mean(
-                    (th.abs(ratio - 1) > clip_range).float()).item()
-                clip_fractions.append(clip_fraction)
+                pi_pg_losses.append(pi_policy_loss.item())
+                pi_H_pg_losses.append(pi_H_policy_loss.item())
+                pi_clip_fraction = torch.mean(
+                    (torch.abs(pi_ratio - 1) > clip_range).float()
+                ).item()
+                pi_clip_fractions.append(pi_clip_fraction)
+                pi_H_clip_fraction = torch.mean(
+                    (torch.abs(pi_H_ratio - 1) > clip_range).float()
+                ).item()
+                pi_H_clip_fractions.append(pi_H_clip_fraction)
 
                 if self.clip_range_vf is None:
                     # No clipping
@@ -130,6 +147,7 @@ class HEPO:
                     values_pred = rollout_data.old_values + th.clamp(
                         values - rollout_data.old_values, -clip_range_vf, clip_range_vf
                     )
+
                 # Value loss using the TD(gae_lambda) target
                 value_loss = F.mse_loss(rollout_data.returns, values_pred)
                 value_losses.append(value_loss.item())
@@ -137,23 +155,25 @@ class HEPO:
                 # Entropy loss favor exploration
                 if entropy is None:
                     # Approximate entropy when no analytical form
-                    entropy_loss = -th.mean(-log_prob)
+                    entropy_loss = -torch.mean(-log_prob)
                 else:
-                    entropy_loss = -th.mean(entropy)
+                    entropy_loss = -torch.mean(entropy)
 
                 entropy_losses.append(entropy_loss.item())
 
-                loss = (
-                    policy_loss
-                    + self.ent_coef * entropy_loss
-                    + self.vf_coef * value_loss
-                )
+                # loss = (
+                #     policy_loss
+                #     + self.ent_coef * entropy_loss
+                #     + self.vf_coef * value_loss
+                # )
+
+                loss = pi_policy_loss + pi_H_policy_loss + self.vf_coef * value_loss
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
                 # and discussion in PR #419: https://github.com/DLR-RM/stable-baselines3/pull/419
                 # and Schulman blog: http://joschu.net/blog/kl-approx.html
-                with th.no_grad():
+                with torch.no_grad():
                     log_ratio = log_prob - rollout_data.old_log_prob
                     approx_kl_div = (
                         th.mean((th.exp(log_ratio) - 1) -
@@ -171,13 +191,13 @@ class HEPO:
                     break
 
                 # Optimization step
-                self.policy.optimizer.zero_grad()
+                self.pi_policy.optimizer.zero_grad()
                 loss.backward()
                 # Clip grad norm
-                th.nn.utils.clip_grad_norm_(
-                    self.policy.parameters(), self.max_grad_norm
+                torch.nn.utils.clip_grad_norm_(
+                    self.pi_policy.parameters(), self.max_grad_norm
                 )
-                self.policy.optimizer.step()
+                self.pi_policy.optimizer.step()
 
             self._n_updates += 1
             if not continue_training:
