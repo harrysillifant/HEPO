@@ -1,11 +1,12 @@
 import torch
 from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
+from gymnasium import spaces
 
 
 class HEPO:
     def __init__(self, policy, env1, env2):
         self.pi = HEPOPolicy(policy=policy, env=env1)
-        self.pi_ref = HEPOPolicy(policy=policy, env=env2)
+        self.pi_H = HEPOPolicy(policy=policy, env=env2)
 
     def collect_rollouts(self, callback1=None, callback2=None):
         """
@@ -17,57 +18,108 @@ class HEPO:
             self.pi.rollout_buffer,
             n_rollout_steps=self.pi.n_steps,
         )
-        self.pi_ref.collect_rollouts(
-            self.pi_ref,
+        self.pi_H.collect_rollouts(
+            self.pi_H,
             callback2,
-            self.pi_ref.rollout_buffer,
-            n_rollout_steps=self.pi_ref.n_steps,
+            self.pi_H.rollout_buffer,
+            n_rollout_steps=self.pi_H.n_steps,
         )
 
     def train_pi(self):
-        # Train pi on a collection
+        # Switch to train mode (this affects batch norm / dropout)
         self.pi.policy.set_training_mode(True)
+        # Update optimizer learning rate
+        self._update_learning_rate(self.policy.optimizer)
+        # Compute current clip range
+        clip_range = self.clip_range(
+            self._current_progress_remaining)  # type: ignore[operator]
+        # Optional: clip range for the value function
+        if self.clip_range_vf is not None:
+            clip_range_vf = self.clip_range_vf(
+                self._current_progress_remaining)  # type: ignore[operator]
 
-        pi_entropy_losses = []
-        pi_pg_losses, pi_value_losses = [], []
-        pi_clip_fractions = []
+        entropy_losses = []
+        pg_losses, value_losses = [], []
+        clip_fractions = []
+
         continue_training = True
-        batch_size = 8
+        # train for n_epochs epochs
         for epoch in range(self.n_epochs):
             approx_kl_divs = []
-            # Compute \hat{J}^{\pi^i}_{HEPO}(\pi)
-            for pi_rollout_data in self.pi.rollout_buffer.get(batch_size):
+            # Do a complete pass on the rollout buffer
+            for pi_rollout_data, pi_H_rollout_data in zip(
+                self.pi.rollout_buffer.get(self.batch_size),
+                self.pi_H.rollout_buffer.get(self.batch_size),
+            ):
                 pi_actions = pi_rollout_data.actions
+                pi_H_actions = pi_H_rollout_data.actions
 
-                pi_values, pi_log_prob, pi_entropy = self.pi.policy.evaluate_actions(
-                    pi_rollout_data.observations, pi_actions
+                if isinstance(self.action_space, spaces.Discrete):
+                    # Convert discrete action from float to long
+                    pi_actions = pi_actions.long().flatten()
+                    pi_H_actions = pi_H_actions.long().flatten()
+
+                values, log_prob, entropy = self.policy.evaluate_actions(
+                    rollout_data.observations, actions
                 )
-                pi_values = pi_values.flatten()
+                values = values.flatten()
 
-                pi_advantages = (
-                    pi_rollout_data.advantages
-                )  # advantages of pi on task rewards
+                # Normalize advantage
+                pi_task_advantages = pi_rollout_data.task_advantages
+                pi_heuristic_advantages = pi_rollout_data.heuristic_advantages
+                pi_H_task_advantages = pi_H_rollout_data.task_advantages
+                pi_H_heuristic_advantages = pi_H_rollout_data.heuristic_advantages
 
+                # Normalization does not make sense if mini batchsize == 1, see GH issue #325
                 if self.normalize_advantage and len(advantages) > 1:
-                    pi_advantages = (pi_advantages - pi_advantages.mean()) / (
-                        pi_advantages.std() + 1e-8
-                    )
+                    pi_task_advantages = (
+                        pi_task_advantages - pi_task_advantages.mean()
+                    ) / (pi_task_advantages.std() + 1e-8)
+                    pi_heuristic_advantages = (
+                        pi_heuristic_advantages - pi_heuristic_advantages.mean()
+                    ) / (pi_heuristic_advantages.std() + 1e-8)
+                    pi_H_task_advantages = (
+                        pi_H_task_advantages - pi_H_task_advantages.mean()
+                    ) / (pi_H_task_advantages.std() + 1e-8)
+                    pi_H_heuristic_advantages = (
+                        pi_H_heuristic_advantages - pi_H_heuristic_advantages.mean()
+                    ) / (pi_H_heuristic_advantages.std() + 1e-8)
 
                 # ratio between old and new policy, should be one at the first iteration
-                pi_ratio = th.exp(pi_log_prob - pi_rollout_data.old_log_prob)
+                pi_ratio = torch.exp(log_prob - pi_rollout_data.old_log_prob)
+                pi_H_ratio = torch.exp(
+                    log_prob - pi_H_rollout_data.old_log_prob)
 
-                pi_policy_loss_1 = pi_advantages * pi_ratio
-                pi_policy_loss_2 = pi_advantages * th.clamp(
+                # clipped surrogate loss
+                # policy_loss_1 = advantages * ratio
+                # policy_loss_2 = advantages * th.clamp(
+                #     ratio, 1 - clip_range, 1 + clip_range
+                # )
+                # policy_loss = -th.min(policy_loss_1, policy_loss_2).mean()
+
+                pi_U = (1 + self.alpha) * pi_task_advantages + \
+                    pi_heuristic_advantages
+                pi_H_U = (
+                    1 + self.alpha
+                ) * pi_H_task_advantages + pi_H_heuristic_advantages
+                pi_policy_loss_1 = pi_U * pi_ratio
+                pi_policy_loss_2 = pi_U * torch.clamp(
                     pi_ratio, 1 - clip_range, 1 + clip_range
                 )
                 pi_policy_loss = - \
-                    th.min(pi_policy_loss_1, pi_policy_loss_2).mean()
+                    torch.min(pi_policy_loss_1, pi_policy_loss_2).mean()
+                pi_H_policy_loss_1 = pi_H_U * pi_H_ratio
+                pi_H_policy_loss_2 = pi_H_U * torch.clamp(
+                    pi_H_ratio, 1 - clip_range, 1 + clip_range
+                )
+                pi_H_policy_loss = - \
+                    torch.min(pi_H_policy_loss_1, pi_H_policy_loss_2)
 
-                pi_pg_losses.append(pi_policy_loss.item())
-                pi_clip_fraction = th.mean(
-                    (th.abs(pi_ratio - 1) > pi_clip_range).float()
-                ).item()
-                pi_clip_fractions.append(pi_clip_fraction)
+                # Logging
+                pg_losses.append(policy_loss.item())
+                clip_fraction = th.mean(
+                    (th.abs(ratio - 1) > clip_range).float()).item()
+                clip_fractions.append(clip_fraction)
 
                 if self.clip_range_vf is None:
                     # No clipping
@@ -78,16 +130,16 @@ class HEPO:
                     values_pred = rollout_data.old_values + th.clamp(
                         values - rollout_data.old_values, -clip_range_vf, clip_range_vf
                     )
-
-                value_loss = F.mse_loss(
-                    rollout_data.returns, values_pred
-                )  # compute new value loss here
+                # Value loss using the TD(gae_lambda) target
+                value_loss = F.mse_loss(rollout_data.returns, values_pred)
                 value_losses.append(value_loss.item())
 
+                # Entropy loss favor exploration
                 if entropy is None:
-                    entropy_loss = -torch.mean(-log_prob)
+                    # Approximate entropy when no analytical form
+                    entropy_loss = -th.mean(-log_prob)
                 else:
-                    entropy_loss = -torch.mean(entropy)
+                    entropy_loss = -th.mean(entropy)
 
                 entropy_losses.append(entropy_loss.item())
 
@@ -95,8 +147,12 @@ class HEPO:
                     policy_loss
                     + self.ent_coef * entropy_loss
                     + self.vf_coef * value_loss
-                )  # compute new loss here
+                )
 
+                # Calculate approximate form of reverse KL Divergence for early stopping
+                # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
+                # and discussion in PR #419: https://github.com/DLR-RM/stable-baselines3/pull/419
+                # and Schulman blog: http://joschu.net/blog/kl-approx.html
                 with th.no_grad():
                     log_ratio = log_prob - rollout_data.old_log_prob
                     approx_kl_div = (
@@ -114,20 +170,42 @@ class HEPO:
                         )
                     break
 
-                self.pi.policy.zero_grad()
+                # Optimization step
+                self.policy.optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(
-                    self.pi.policy.parameters(), self.max_grad_norm
+                # Clip grad norm
+                th.nn.utils.clip_grad_norm_(
+                    self.policy.parameters(), self.max_grad_norm
                 )
-                self.pi.policy.optimizer.step()
-            # Compute \hat{J}^{\pi_H^i}_{HEPO}(\pi)
-            for _ in self.pi_ref.rollout_data.get(batch_size):
+                self.policy.optimizer.step()
 
             self._n_updates += 1
             if not continue_training:
                 break
 
-    def train_pi_ref(self):
+        explained_var = explained_variance(
+            self.rollout_buffer.values.flatten(), self.rollout_buffer.returns.flatten()
+        )
+
+        # Logs
+        self.logger.record("train/entropy_loss", np.mean(entropy_losses))
+        self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
+        self.logger.record("train/value_loss", np.mean(value_losses))
+        self.logger.record("train/approx_kl", np.mean(approx_kl_divs))
+        self.logger.record("train/clip_fraction", np.mean(clip_fractions))
+        self.logger.record("train/loss", loss.item())
+        self.logger.record("train/explained_variance", explained_var)
+        if hasattr(self.policy, "log_std"):
+            self.logger.record(
+                "train/std", th.exp(self.policy.log_std).mean().item())
+
+        self.logger.record("train/n_updates",
+                           self._n_updates, exclude="tensorboard")
+        self.logger.record("train/clip_range", clip_range)
+        if self.clip_range_vf is not None:
+            self.logger.record("train/clip_range_vf", clip_range_vf)
+
+    def train_pi_H(self):
         pass
 
     def learn(self):
@@ -159,7 +237,7 @@ class HEPO:
                 self.dump_logs(iteration)
 
             self.train_pi()
-            self.train_pi_ref()
+            self.train_pi_H()
 
         # callback.on_training_end()
 
@@ -203,7 +281,11 @@ class HEPOPolicy(OnPolicyAlgorithm):
         callback.on_rollout_start()
 
         while n_steps < n_rollout_steps:
-            if self.use_sde and self.sde_sample_freq > 0 and n_steps % self.sde_sample_freq == 0:
+            if (
+                self.use_sde
+                and self.sde_sample_freq > 0
+                and n_steps % self.sde_sample_freq == 0
+            ):
                 # Sample a new noise matrix
                 self.policy.reset_noise(env.num_envs)
 
@@ -227,10 +309,12 @@ class HEPOPolicy(OnPolicyAlgorithm):
                     # Otherwise, clip the actions to avoid out of bound error
                     # as we are sampling from an unbounded Gaussian distribution
                     clipped_actions = np.clip(
-                        actions, self.action_space.low, self.action_space.high)
+                        actions, self.action_space.low, self.action_space.high
+                    )
 
             new_obs, rewards, dones, infos = env.step(
-                clipped_actions)  # shaping and task rewards are in here
+                clipped_actions
+            )  # shaping and task rewards are in here
 
             heuristic_reward = infos["episode_rewards"]["heuristic_total"]
             task_reward = infos["episode_rewards"]["task_total"]
@@ -258,7 +342,8 @@ class HEPOPolicy(OnPolicyAlgorithm):
                     and infos[idx].get("TimeLimit.truncated", False)
                 ):
                     terminal_obs = self.policy.obs_to_tensor(
-                        infos[idx]["terminal_observation"])[0]
+                        infos[idx]["terminal_observation"]
+                    )[0]
                     with th.no_grad():
                         terminal_value = self.policy.predict_values(
                             terminal_obs)[0]  # type: ignore[arg-type]
