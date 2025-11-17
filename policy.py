@@ -95,7 +95,6 @@ class HEPO:
                     pi_H_heuristic_advantages = (
                         pi_H_heuristic_advantages - pi_H_heuristic_advantages.mean()
                     ) / (pi_H_heuristic_advantages.std() + 1e-8)
-
                 # ratio between old and new policy, should be one at the first iteration
                 pi_ratio = torch.exp(log_prob - pi_rollout_data.old_log_prob)
                 pi_H_ratio = torch.exp(
