@@ -228,6 +228,9 @@ class HEPO:
     def train_pi_H(self):
         pass
 
+    def train_alpha(self):
+        pass
+
     def learn(
         self,
         total_timesteps: int,
@@ -250,6 +253,8 @@ class HEPO:
             progress_bar,
         )
 
+        callback.on_training_start(locals(), globals())
+
         assert self.env1 is not None and self.env2 is not None
 
         while self.num_timesteps < total_timesteps:
@@ -259,16 +264,18 @@ class HEPO:
             if not continue_training:
                 break
 
-            # self._update_current
+            self._update_current_progress_remaining(
+                self.num_timesteps, total_timesteps)
 
             if log_interval is not None and iteration % log_interval == 0:
-                # assert self.ep_info_buffer is not None
+                assert self.ep_info_buffer is not None
                 self.dump_logs(iteration)
 
             self.train_pi()
             self.train_pi_H()
+            self.train_alpha()
 
-        # callback.on_training_end()
+        callback.on_training_end()
 
         return self
 
