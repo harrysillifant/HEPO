@@ -228,27 +228,36 @@ class HEPO:
     def train_pi_H(self):
         pass
 
-    def learn(self):
+    def learn(
+        self,
+        total_timesteps: int,
+        callback: MaybeCallback = None,
+        log_interval: int = 1,
+        tb_log_name: str = "PPO",
+        reset_num_timesteps: bool = True,
+        progress_bar: bool = False,
+    ):
         """
         Train both policies,
         """
-        # total_timesteps, callback = self._setup_learn(
-        #     total_timesteps,
-        #     callback,
-        #     reset_num_timesteps,
-        #     tb_log_name,
-        #     progress_bar,
-        # )
+        iteration = 0
+
+        total_timesteps, callback = self._setup_learn(
+            total_timesteps,
+            callback,
+            reset_num_timesteps,
+            tb_log_name,
+            progress_bar,
+        )
 
         assert self.env1 is not None and self.env2 is not None
 
         while self.num_timesteps < total_timesteps:
-            continue_training = self.collect_rollouts()
+            continue_training = self.pi.collect_rollouts()
+            continue_training = self.pi_H.collect_rollouts()
 
             if not continue_training:
                 break
-
-            iteration += 1
 
             # self._update_current
 
