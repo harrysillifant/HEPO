@@ -65,11 +65,18 @@ class HEPO:
                     pi_actions = pi_actions.long().flatten()
                     pi_H_actions = pi_H_actions.long().flatten()
 
-                values, log_prob, entropy = self.policy.evaluate_actions(
-                    rollout_data.observations, actions
+                # values, log_prob, entropy = self.policy.evaluate_actions(
+                #     rollout_data.observations, actions
+                # )
+                (task_values, heuristic_values), log_prob, entropy = (
+                    self.pi.policy.evaluate_actions(
+                        pi_rollout_data.observations, pi_actions
+                    )
                 )
+                # maybe get pi_H values here as well
 
-                values = values.flatten()
+                task_values = task_values.flatten()
+                heuristic_values = heuristic_values.flatten()
 
                 # Normalize advantage
                 pi_task_advantages = pi_rollout_data.task_advantages
