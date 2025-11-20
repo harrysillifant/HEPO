@@ -1,4 +1,6 @@
 import torch
+import torch.nn.functional as F
+
 from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
 from gymnasium import spaces
 
@@ -35,6 +37,7 @@ class HEPO:
         # Compute current clip range
         clip_range = self.clip_range(
             self._current_progress_remaining)  # type: ignore[operator]
+
         # Optional: clip range for the value function
         if self.clip_range_vf is not None:
             clip_range_vf = self.clip_range_vf(
@@ -43,8 +46,8 @@ class HEPO:
         entropy_losses = []
         pi_pg_losses = []
         pi_H_pg_losses = []
-        pi_value_task_losses = []
-        pi_value_heuristic_losses = []
+        task_value_losses = []
+        heuristic_value_losses = []
         pi_clip_fractions = []
         pi_H_clip_fractions = []
 
@@ -147,17 +150,31 @@ class HEPO:
 
                 if self.clip_range_vf is None:
                     # No clipping
-                    values_pred = values
+                    task_values_pred = task_values
+                    heuristic_values_pred = heuristic_values
                 else:
                     # Clip the difference between old and new value
                     # NOTE: this depends on the reward scaling
-                    values_pred = rollout_data.old_values + th.clamp(
-                        values - rollout_data.old_values, -clip_range_vf, clip_range_vf
+                    task_values_pred = pi_rollout_data.old_values + torch.clamp(
+                        task_values - pi_rollout_data.old_values,
+                        -clip_range_vf,
+                        clip_range_vf,
+                    )
+                    heuristic_values_pred = pi_rollout_data.old_values + torch.clamp(
+                        heuristic_values - pi_rollout_data.old_values,
+                        -clip_range_vf,
+                        clip_range_vf,
                     )
 
                 # Value loss using the TD(gae_lambda) target
-                value_loss = F.mse_loss(rollout_data.returns, values_pred)
-                value_losses.append(value_loss.item())
+                task_value_loss = F.mse_loss(
+                    pi_rollout_data.task_returns, task_values_pred
+                )
+                task_value_losses.append(task_value_loss.item())
+                heuristic_value_loss = F.mse_loss(
+                    pi_rollout_data.heuristic_returns, heuristic_values_pred
+                )
+                heuristic_value_losses.append(heuristic_value_loss.item())
 
                 # Entropy loss favor exploration
                 if entropy is None:
@@ -174,17 +191,22 @@ class HEPO:
                 #     + self.vf_coef * value_loss
                 # )
 
-                loss = pi_policy_loss + pi_H_policy_loss + self.vf_coef * value_loss
+                loss = (
+                    pi_policy_loss
+                    + pi_H_policy_loss
+                    + self.vf_coef * task_value_loss
+                    + self.vf_coef * heuristic_value_loss
+                )
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
                 # and discussion in PR #419: https://github.com/DLR-RM/stable-baselines3/pull/419
                 # and Schulman blog: http://joschu.net/blog/kl-approx.html
                 with torch.no_grad():
-                    log_ratio = log_prob - rollout_data.old_log_prob
+                    log_ratio = log_prob - pi_rollout_data.old_log_prob
                     approx_kl_div = (
-                        th.mean((th.exp(log_ratio) - 1) -
-                                log_ratio).cpu().numpy()
+                        torch.mean((torch.exp(log_ratio) - 1) -
+                                   log_ratio).cpu().numpy()
                     )
                     approx_kl_divs.append(approx_kl_div)
 
