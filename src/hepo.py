@@ -1,7 +1,9 @@
+import numpy as np
 import torch
 import torch.nn.functional as F
 
 from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
+from stable_baselines3.common.utils import explained_variance
 from gymnasium import spaces
 
 from algorithm import HEPOAlgorithm
@@ -219,14 +221,12 @@ class HEPO:
                         )
                     break
 
-                # Optimization step
-                self.pi_policy.optimizer.zero_grad()
+                self.pi.policy.optimizer.zero_grad()
                 loss.backward()
-                # Clip grad norm
                 torch.nn.utils.clip_grad_norm_(
-                    self.pi_policy.parameters(), self.max_grad_norm
+                    self.pi.policy.parameters(), self.max_grad_norm
                 )
-                self.pi_policy.optimizer.step()
+                self.pi.policy.optimizer.step()
 
             self._n_updates += 1
             if not continue_training:
@@ -237,22 +237,23 @@ class HEPO:
         )
 
         # Logs
-        self.logger.record("train/entropy_loss", np.mean(entropy_losses))
-        self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
-        self.logger.record("train/value_loss", np.mean(value_losses))
-        self.logger.record("train/approx_kl", np.mean(approx_kl_divs))
-        self.logger.record("train/clip_fraction", np.mean(clip_fractions))
-        self.logger.record("train/loss", loss.item())
-        self.logger.record("train/explained_variance", explained_var)
+        self.pi.logger.record("train/entropy_loss", np.mean(entropy_losses))
+        self.pi.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
+        self.pi.logger.record("train/value_loss", np.mean(value_losses))
+        self.pi.logger.record("train/approx_kl", np.mean(approx_kl_divs))
+        self.pi.logger.record("train/clip_fraction", np.mean(clip_fractions))
+        self.pi.logger.record("train/loss", loss.item())
+        self.pi.logger.record("train/explained_variance", explained_var)
         if hasattr(self.policy, "log_std"):
-            self.logger.record(
-                "train/std", th.exp(self.policy.log_std).mean().item())
+            self.pi.logger.record(
+                "train/std", th.exp(self.policy.log_std).mean().item()
+            )
 
-        self.logger.record("train/n_updates",
-                           self._n_updates, exclude="tensorboard")
-        self.logger.record("train/clip_range", clip_range)
+        self.pi.logger.record(
+            "train/n_updates", self._n_updates, exclude="tensorboard")
+        self.pi.logger.record("train/clip_range", clip_range)
         if self.clip_range_vf is not None:
-            self.logger.record("train/clip_range_vf", clip_range_vf)
+            self.pi.logger.record("train/clip_range_vf", clip_range_vf)
 
     def train_pi_H(self):
         pass
