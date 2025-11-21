@@ -73,11 +73,15 @@ class HEPO:
                 # values, log_prob, entropy = self.policy.evaluate_actions(
                 #     rollout_data.observations, actions
                 # )
-                (task_values, heuristic_values), log_prob, entropy = (
+                (task_values, heuristic_values), pi_log_prob, entropy = (
                     self.pi.policy.evaluate_actions(
                         pi_rollout_data.observations, pi_actions
                     )
                 )
+                _, pi_H_log_prob, entropy = self.pi.policy.evaluate_actions(
+                    pi_H_rollout_data.observation, pi_H_actions
+                )
+
                 # maybe get pi_H values here as well
 
                 task_values = task_values.flatten()
@@ -109,9 +113,12 @@ class HEPO:
                     ) / (pi_H_heuristic_advantages.std() + 1e-8)
 
                 # ratio between old and new policy, should be one at the first iteration
-                pi_ratio = torch.exp(log_prob - pi_rollout_data.old_log_prob)
+                # LOG PROB IS WRONG HERE
+                pi_ratio = torch.exp(
+                    pi_log_prob - pi_rollout_data.pi_old_log_prob)
                 pi_H_ratio = torch.exp(
-                    log_prob - pi_H_rollout_data.old_log_prob)
+                    pi_H_log_prob - pi_H_rollout_data.pi_H_old_log_prob
+                )
 
                 # clipped surrogate loss
                 # policy_loss_1 = advantages * ratio
