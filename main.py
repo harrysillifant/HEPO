@@ -20,3 +20,5 @@ Update pi_H based on surrogate heuristic objectives
 Update the 4 value functions
 Update alpha
 """
+
+if __na e
