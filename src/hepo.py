@@ -184,27 +184,21 @@ class HEPO:
                 )
                 heuristic_value_losses.append(heuristic_value_loss.item())
 
-                # HOW to incorporate entropy?
-                # # Entropy loss favor exploration
-                # if entropy is None:
-                #     # Approximate entropy when no analytical form
-                #     entropy_loss = -torch.mean(-pi_log_prob)
-                # else:
-                #     entropy_loss = -torch.mean(entropy)
-                #
-                # entropy_losses.append(entropy_loss.item())
-                #
-                # loss = (
-                #     policy_loss
-                #     + self.ent_coef * entropy_loss
-                #     + self.vf_coef * value_loss
-                # )
+                if pi_entropy is None:
+                    # Approximate entropy when no analytical form
+                    entropy_loss = -torch.mean(-pi_log_prob)
+                else:
+                    entropy_loss = -torch.mean(pi_entropy)
 
+                entropy_losses.append(entropy_loss.item())
+
+                # Note entropy loss only depends on the entropy calculated from the pi trajectory
                 loss = (
                     pi_policy_loss
                     + pi_H_policy_loss
                     + self.vf_coef * task_value_loss
                     + self.vf_coef * heuristic_value_loss
+                    + self.ent_coef * entropy_loss
                 )
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
@@ -244,32 +238,34 @@ class HEPO:
         )
 
         # Logs
-        # self.pi.logger.record("train/entropy_loss", np.mean(entropy_losses))
+        self.pi.logger.record("train/pi/entropy_loss", np.mean(entropy_losses))
         self.pi.logger.record(
             "train/pi/pi_policy_gradient_loss", np.mean(pi_pg_losses))
         self.pi.logger.record(
             "train/pi/pi_H_policy_gradient_loss", np.mean(pi_H_pg_losses)
         )
         # self.pi.logger.record("train/value_loss", np.mean(value_losses))
-        self.pi.logger.record("train/task_value_loss",
+        self.pi.logger.record("train/pi/task_value_loss",
                               np.mean(task_value_losses))
-        self.pi.logger.record("train/approx_kl", np.mean(approx_kl_divs))
-        self.pi.logger.record("train/pi_clip_fraction",
+        self.pi.logger.record("train/pi/approx_kl", np.mean(approx_kl_divs))
+        self.pi.logger.record("train/pi/pi_clip_fraction",
                               np.mean(pi_clip_fractions))
-        self.pi.logger.record("train/pi_H_clip_fractions",
-                              np.mean(pi_H_clip_fractions))
-        self.pi.logger.record("train/loss", loss.item())
-        self.pi.logger.record("train/explained_variance", explained_var)
+        self.pi.logger.record(
+            "train/pi/pi_H_clip_fractions", np.mean(pi_H_clip_fractions)
+        )
+        self.pi.logger.record("train/pi/loss", loss.item())
+        self.pi.logger.record("train/pi/explained_variance", explained_var)
         if hasattr(self.policy, "log_std"):
             self.pi.logger.record(
-                "train/std", torch.exp(self.pi_policy.log_std).mean().item()
+                "train/pi/std", torch.exp(self.pi_policy.log_std).mean().item()
             )
 
         self.pi.logger.record(
-            "train/n_updates", self._n_updates, exclude="tensorboard")
-        self.pi.logger.record("train/clip_range", clip_range)
+            "train/pi/n_updates", self._n_updates, exclude="tensorboard"
+        )
+        self.pi.logger.record("train/pi/clip_range", clip_range)
         if self.clip_range_vf is not None:
-            self.pi.logger.record("train/clip_range_vf", clip_range_vf)
+            self.pi.logger.record("train/pi/clip_range_vf", clip_range_vf)
 
     def train_pi_H(self):
         # Switch to train mode (this affects batch norm / dropout)
@@ -411,27 +407,20 @@ class HEPO:
                 )
                 heuristic_value_losses.append(heuristic_value_loss.item())
 
-                # HOW to incorporate entropy?
-                # # Entropy loss favor exploration
-                # if entropy is None:
-                #     # Approximate entropy when no analytical form
-                #     entropy_loss = -torch.mean(-pi_log_prob)
-                # else:
-                #     entropy_loss = -torch.mean(entropy)
-                #
-                # entropy_losses.append(entropy_loss.item())
-                #
-                # loss = (
-                #     policy_loss
-                #     + self.ent_coef * entropy_loss
-                #     + self.vf_coef * value_loss
-                # )
+                if pi_H_entropy is None:
+                    # Approximate entropy when no analytical form
+                    entropy_loss = -torch.mean(-pi_log_prob)
+                else:
+                    entropy_loss = -torch.mean(pi_H_entropy)
+
+                entropy_losses.append(entropy_loss.item())
 
                 loss = (
                     pi_policy_loss
                     + pi_H_policy_loss
                     + self.vf_coef * task_value_loss
                     + self.vf_coef * heuristic_value_loss
+                    + self.ent_coef * entropy_loss
                 )
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
@@ -471,35 +460,40 @@ class HEPO:
         )
 
         # Logs
-        # self.pi_H.logger.record("train/entropy_loss", np.mean(entropy_losses))
         self.pi_H.logger.record(
-            "train/pi/pi_policy_gradient_loss", np.mean(pi_pg_losses)
+            "train/pi_H/entropy_loss", np.mean(entropy_losses))
+        self.pi_H.logger.record(
+            "train/pi_H/pi_policy_gradient_loss", np.mean(pi_pg_losses)
         )
         self.pi_H.logger.record(
-            "train/pi/pi_H_policy_gradient_loss", np.mean(pi_H_pg_losses)
+            "train/pi_H/pi_H_policy_gradient_loss", np.mean(pi_H_pg_losses)
         )
         # self.pi_H.logger.record("train/value_loss", np.mean(value_losses))
-        self.pi_H.logger.record("train/task_value_loss",
-                                np.mean(task_value_losses))
-        self.pi_H.logger.record("train/approx_kl", np.mean(approx_kl_divs))
-        self.pi_H.logger.record("train/pi_clip_fraction",
-                                np.mean(pi_clip_fractions))
         self.pi_H.logger.record(
-            "train/pi_H_clip_fractions", np.mean(pi_H_clip_fractions)
+            "train/pi_H/task_value_loss", np.mean(task_value_losses)
         )
-        self.pi_H.logger.record("train/loss", loss.item())
-        self.pi_H.logger.record("train/explained_variance", explained_var)
+        self.pi_H.logger.record("train/pi_H/approx_kl",
+                                np.mean(approx_kl_divs))
+        self.pi_H.logger.record(
+            "train/pi_H/pi_clip_fraction", np.mean(pi_clip_fractions)
+        )
+        self.pi_H.logger.record(
+            "train/pi_H/pi_H_clip_fractions", np.mean(pi_H_clip_fractions)
+        )
+        self.pi_H.logger.record("train/pi_H/loss", loss.item())
+        self.pi_H.logger.record("train/pi_H/explained_variance", explained_var)
         if hasattr(self.policy, "log_std"):
             self.pi_H.logger.record(
-                "train/std", torch.exp(self.pi_policy.log_std).mean().item()
+                "train/pi_H/std", torch.exp(
+                    self.pi_policy.log_std).mean().item()
             )
 
         self.pi_H.logger.record(
-            "train/n_updates", self._n_updates, exclude="tensorboard"
+            "train/pi_H/n_updates", self._n_updates, exclude="tensorboard"
         )
-        self.pi_H.logger.record("train/clip_range", clip_range)
+        self.pi_H.logger.record("train/pi_H/clip_range", clip_range)
         if self.clip_range_vf is not None:
-            self.pi_H.logger.record("train/clip_range_vf", clip_range_vf)
+            self.pi_H.logger.record("train/pi_H/clip_range_vf", clip_range_vf)
 
     def train_alpha(self):
         pass
@@ -531,8 +525,6 @@ class HEPO:
         assert self.env1 is not None and self.env2 is not None
 
         while self.num_timesteps < total_timesteps:
-            # continue_training = self.pi.collect_rollouts()
-            # continue_training = self.pi_H.collect_rollouts()
             continue_training = self.collect_rollouts()
 
             if not continue_training:
