@@ -1,4 +1,4 @@
-from stable_baselines3.common import RolloutBuffer
+from stable_baselines3.common.buffers import RolloutBuffer
 from gymnasium import spaces
 import torch
 from typing import Union
