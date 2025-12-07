@@ -6,7 +6,12 @@ from collections import deque
 
 from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
 from stable_baselines3.common.utils import explained_variance
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import (
+    BaseCallback,
+    CallbackList,
+    ConvertCallback,
+    ProgressBarCallback,
+)
 from stable_baselines3.common.type_aliases import MaybeCallback
 from stable_baselines3.common.utils import configure_logger
 from gymnasium import spaces
@@ -599,109 +604,111 @@ class HEPO:
     def train_alpha(self):
         pass
 
-    #
-    # def _setup_learn(
-    #     self,
-    #     total_timesteps,
-    #     callback=None,
-    #     reset_num_timesteps=True,
-    #     tb_log_name="run",
-    #     progress_bar=False,
-    # ):
-    #     self.start_time = time.time_ns()
-    #     if self.pi.ep_info_buffer is None or reset_num_timesteps:
-    #         self.pi.ep_info_buffer = deque(maxlen=self.pi._stats_window_size)
-    #         self.pi.ep_success_buffer = deque(
-    #             maxlen=self.pi._stats_window_size)
-    #
-    #     if self.pi_H.ep_info_buffer is None or reset_num_timesteps:
-    #         self.pi_H.ep_info_buffer = deque(
-    #             maxlen=self.pi_H._stats_window_size)
-    #         self.pi_H.ep_success_buffer = deque(
-    #             maxlen=self.pi_H._stats_window_size)
-    #
-    #     if self.pi.action_noise is not None:
-    #         self.pi.action_noise.reset()
-    #
-    #     if self.pi_H.action_noise is not None:
-    #         self.pi_H.action_noise.reset()
-    #
-    #     if reset_num_timesteps:
-    #         self.num_timesteps = 0
-    #         self._episode_num = 0
-    #     else:
-    #         total_timesteps += self.num_timesteps
-    #
-    #     self._total_timesteps = total_timesteps
-    #     self._num_timesteps_at_start = self.num_timesteps
-    #
-    #     if reset_num_timesteps or self.pi._last_obs is None:
-    #         assert self.pi.env is not None
-    #         self.pi._last_obs = self.pi.env.reset()  # type: ignore[assignment]
-    #         self.pi._last_episode_starts = np.ones(
-    #             (self.pi.env.num_envs,), dtype=bool)
-    #         # Retrieve unnormalized observation for saving into the buffer
-    #         if self.pi._vec_normalize_env is not None:
-    #             self.pi._last_original_obs = (
-    #                 self.pi._vec_normalize_env.get_original_obs()
-    #             )
-    #
-    #     if reset_num_timesteps or self.pi_H._last_obs is None:
-    #         assert self.pi_H.env is not None
-    #         # type: ignore[assignment]
-    #         self.pi_H._last_obs = self.pi_H.env.reset()
-    #         self.pi_H._last_episode_starts = np.ones(
-    #             (self.pi_H.env.num_envs,), dtype=bool
-    #         )
-    #         # Retrieve unnormalized observation for saving into the buffer
-    #         if self.pi_H._vec_normalize_env is not None:
-    #             self.pi_H._last_original_obs = (
-    #                 self.pi_H._vec_normalize_env.get_original_obs()
-    #             )
-    #
-    #     # Configure logger's outputs if no logger was passed
-    #     if not self.pi._custom_logger:
-    #         self._logger = configure_logger(
-    #             self.pi.verbose,
-    #             self.pi_H.tensorboard_log,
-    #             tb_log_name,
-    #             reset_num_timesteps,
-    #         )
-    #
-    #     if not self.pi_H._custom_logger:
-    #         self.pi_H._logger = configure_logger(
-    #             self.pi_H.verbose,
-    #             self.pi_H.tensorboard_log,
-    #             tb_log_name,
-    #             reset_num_timesteps,
-    #         )
-    #
-    #     # Create eval callback if needed
-    #     callback = self._init_callback(callback, progress_bar)
-    #
-    #     return total_timesteps, callback
-    #
-    # def _init_callback(
-    #     self,
-    #     callback: MaybeCallback,
-    #     progress_bar: bool = False,
-    # ) -> BaseCallback:
-    #     pass
-    #     # Parameters/functions that shoudlnt be individual to either policy
-    #     # self.num_timesteps
-    #     # self.update_current_progress_remaining()
-    #     # self._total_timesteps
-    #     #
-    #     # Unsure about
-    #     # self.action_noise
-    #     # self._episode_n
-    #     # self._init_callback
-    #
-    # def _update_current_progress_remaining(self, num_timesteps, total_timesteps):
-    #     self._current_progress_remaining = 1.0 - float(num_timesteps) / float(
-    #         total_timesteps
-    #     )
-    #
+    def _setup_learn(
+        self,
+        total_timesteps,
+        callback=None,
+        reset_num_timesteps=True,
+        tb_log_name="run",
+        progress_bar=False,
+    ):
+        self.start_time = time.time_ns()
+        if self.pi.ep_info_buffer is None or reset_num_timesteps:
+            self.pi.ep_info_buffer = deque(maxlen=self.pi._stats_window_size)
+            self.pi.ep_success_buffer = deque(
+                maxlen=self.pi._stats_window_size)
+
+        if self.pi_H.ep_info_buffer is None or reset_num_timesteps:
+            self.pi_H.ep_info_buffer = deque(
+                maxlen=self.pi_H._stats_window_size)
+            self.pi_H.ep_success_buffer = deque(
+                maxlen=self.pi_H._stats_window_size)
+
+        if self.pi.action_noise is not None:
+            self.pi.action_noise.reset()
+
+        if self.pi_H.action_noise is not None:
+            self.pi_H.action_noise.reset()
+
+        if reset_num_timesteps:
+            self.num_timesteps = 0
+            self._episode_num = 0
+        else:
+            total_timesteps += self.num_timesteps
+
+        self._total_timesteps = total_timesteps
+        self._num_timesteps_at_start = self.num_timesteps
+
+        if reset_num_timesteps or self.pi._last_obs is None:
+            assert self.pi.env is not None
+            self.pi._last_obs = self.pi.env.reset()  # type: ignore[assignment]
+            self.pi._last_episode_starts = np.ones(
+                (self.pi.env.num_envs,), dtype=bool)
+            # Retrieve unnormalized observation for saving into the buffer
+            if self.pi._vec_normalize_env is not None:
+                self.pi._last_original_obs = (
+                    self.pi._vec_normalize_env.get_original_obs()
+                )
+
+        if reset_num_timesteps or self.pi_H._last_obs is None:
+            assert self.pi_H.env is not None
+            # type: ignore[assignment]
+            self.pi_H._last_obs = self.pi_H.env.reset()
+            self.pi_H._last_episode_starts = np.ones(
+                (self.pi_H.env.num_envs,), dtype=bool
+            )
+            # Retrieve unnormalized observation for saving into the buffer
+            if self.pi_H._vec_normalize_env is not None:
+                self.pi_H._last_original_obs = (
+                    self.pi_H._vec_normalize_env.get_original_obs()
+                )
+
+        # Configure logger's outputs if no logger was passed
+        if not self.pi._custom_logger:
+            self._logger = configure_logger(
+                self.pi.verbose,
+                self.pi_H.tensorboard_log,
+                tb_log_name,
+                reset_num_timesteps,
+            )
+
+        if not self.pi_H._custom_logger:
+            self.pi_H._logger = configure_logger(
+                self.pi_H.verbose,
+                self.pi_H.tensorboard_log,
+                tb_log_name,
+                reset_num_timesteps,
+            )
+
+        # Create eval callback if needed
+        callback = self._init_callback(callback, progress_bar)
+
+        return total_timesteps, callback
+
+    def _init_callback(
+        self,
+        callback: MaybeCallback,
+        progress_bar: bool = False,
+    ) -> BaseCallback:
+        if isinstance(callback, list):
+            callback = CallbackList(callback)
+
+        # Convert functional callback to object
+        if not isinstance(callback, BaseCallback):
+            callback = ConvertCallback(callback)
+
+        # Add progress bar callback
+        if progress_bar:
+            callback = CallbackList([callback, ProgressBarCallback()])
+
+        callback.init_callback(self)
+        return callback
+
+    def _update_current_progress_remaining(self, num_timesteps, total_timesteps):
+        self._current_progress_remaining = 1.0 - float(num_timesteps) / float(
+            total_timesteps
+        )
+
     def learn(
         self,
         total_timesteps: int,
@@ -716,27 +723,26 @@ class HEPO:
         """
         iteration = 0
 
-        # total_timesteps, callback = self._setup_learn(
-        #     total_timesteps,
-        #     callback,
-        #     reset_num_timesteps,
-        #     tb_log_name,
-        #     progress_bar,
-        # )
+        total_timesteps, callback = self._setup_learn(
+            total_timesteps,
+            callback,
+            reset_num_timesteps,
+            tb_log_name,
+            progress_bar,
+        )
 
-        # callback.on_training_start(locals(), globals())
+        callback.on_training_start(locals(), globals())
 
         assert self.pi.env is not None and self.pi_H.env is not None
 
-        self.num_timesteps = 0
         while self.num_timesteps < total_timesteps:
             continue_training = self.collect_rollouts()
 
             if not continue_training:
                 break
 
-            # self._update_current_progress_remaining(
-            #     self.num_timesteps, total_timesteps)
+            self._update_current_progress_remaining(
+                self.num_timesteps, total_timesteps)
 
             if log_interval is not None and iteration % log_interval == 0:
                 assert self.pi.ep_info_buffer is not None
@@ -749,6 +755,6 @@ class HEPO:
             self.train_alpha()
             self.num_timesteps += 1
 
-        # callback.on_training_end()
+        callback.on_training_end()
 
         return self
