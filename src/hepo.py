@@ -1,19 +1,119 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
+import time
+from collections import deque
 
 from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
 from stable_baselines3.common.utils import explained_variance
+from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.type_aliases import MaybeCallback
+from stable_baselines3.common.utils import configure_logger
 from gymnasium import spaces
 
 from algorithm import HEPOAlgorithm
+from policies import HEPOActorCriticPolicy
 
 
 class HEPO:
-    def __init__(self, policy, env1, env2):
-        self.pi = HEPOAlgorithm(policy=policy, env=env1)
-        self.pi_H = HEPOAlgorithm(policy=policy, env=env2)
+    def __init__(
+        self,
+        policy,
+        env1,
+        env2,
+        learning_rate=3e-4,
+        n_steps=2048,
+        batch_size=64,
+        n_epochs=10,
+        gamma=0.99,
+        gae_lambda=0.95,
+        clip_range=0.2,
+        clip_range_vf=None,
+        normalize_advantage=True,
+        ent_coef=0,
+        vf_coef=0.5,
+        max_grad_norm=0.5,
+        use_sde=False,
+        sde_sample_freq=-1,
+        rollout_buffer_class=None,
+        rollout_buffer_kwargs=None,
+        target_kl=None,
+        stats_window_size=100,
+        tensorboard_log=None,
+        policy_kwargs=None,
+        verbose=0,
+        seed=None,
+        device="auto",
+        _init_setup_model=True,
+    ):
+        self.pi = HEPOAlgorithm(
+            policy=policy,
+            env=env1,
+            learning_rate=learning_rate,
+            n_steps=n_steps,
+            gamma=gamma,
+            gae_lambda=gae_lambda,
+            ent_coef=ent_coef,
+            vf_coef=vf_coef,
+            max_grad_norm=max_grad_norm,
+            use_sde=use_sde,
+            sde_sample_freq=sde_sample_freq,
+            rollout_buffer_class=rollout_buffer_class,
+            rollout_buffer_kwargs=rollout_buffer_kwargs,
+            stats_window_size=stats_window_size,
+            tensorboard_log=tensorboard_log,
+            policy_kwargs=policy_kwargs,
+            verbose=verbose,
+            device=device,
+            seed=seed,
+            _init_setup_model=False,
+            supported_action_spaces=(
+                spaces.Box,
+                spaces.Discrete,
+                spaces.MultiDiscrete,
+                spaces.MultiBinary,
+            ),
+        )
+
+        self.pi_H = HEPOAlgorithm(
+            policy=policy,
+            env=env2,
+            learning_rate=learning_rate,
+            n_steps=n_steps,
+            gamma=gamma,
+            gae_lambda=gae_lambda,
+            ent_coef=ent_coef,
+            vf_coef=vf_coef,
+            max_grad_norm=max_grad_norm,
+            use_sde=use_sde,
+            sde_sample_freq=sde_sample_freq,
+            rollout_buffer_class=rollout_buffer_class,
+            rollout_buffer_kwargs=rollout_buffer_kwargs,
+            stats_window_size=stats_window_size,
+            tensorboard_log=tensorboard_log,
+            policy_kwargs=policy_kwargs,
+            verbose=verbose,
+            device=device,
+            seed=seed,
+            _init_setup_model=False,
+            supported_action_spaces=(
+                spaces.Box,
+                spaces.Discrete,
+                spaces.MultiDiscrete,
+                spaces.MultiBinary,
+            ),
+        )
+
+        self.batch_size = batch_size
+        self.n_epochs = n_epochs
+        self.clip_range = clip_range
+        self.clip_range_vf = clip_range_vf
+        self.normalize_advantage = normalize_advantage
+        self.target_kl = target_kl
+
+        if _init_setup_model:
+            self.pi._setup_model()
+            self.pi_H._setup_model()
 
     def collect_rollouts(self, callback1=None, callback2=None):
         """
@@ -499,6 +599,109 @@ class HEPO:
     def train_alpha(self):
         pass
 
+    #
+    # def _setup_learn(
+    #     self,
+    #     total_timesteps,
+    #     callback=None,
+    #     reset_num_timesteps=True,
+    #     tb_log_name="run",
+    #     progress_bar=False,
+    # ):
+    #     self.start_time = time.time_ns()
+    #     if self.pi.ep_info_buffer is None or reset_num_timesteps:
+    #         self.pi.ep_info_buffer = deque(maxlen=self.pi._stats_window_size)
+    #         self.pi.ep_success_buffer = deque(
+    #             maxlen=self.pi._stats_window_size)
+    #
+    #     if self.pi_H.ep_info_buffer is None or reset_num_timesteps:
+    #         self.pi_H.ep_info_buffer = deque(
+    #             maxlen=self.pi_H._stats_window_size)
+    #         self.pi_H.ep_success_buffer = deque(
+    #             maxlen=self.pi_H._stats_window_size)
+    #
+    #     if self.pi.action_noise is not None:
+    #         self.pi.action_noise.reset()
+    #
+    #     if self.pi_H.action_noise is not None:
+    #         self.pi_H.action_noise.reset()
+    #
+    #     if reset_num_timesteps:
+    #         self.num_timesteps = 0
+    #         self._episode_num = 0
+    #     else:
+    #         total_timesteps += self.num_timesteps
+    #
+    #     self._total_timesteps = total_timesteps
+    #     self._num_timesteps_at_start = self.num_timesteps
+    #
+    #     if reset_num_timesteps or self.pi._last_obs is None:
+    #         assert self.pi.env is not None
+    #         self.pi._last_obs = self.pi.env.reset()  # type: ignore[assignment]
+    #         self.pi._last_episode_starts = np.ones(
+    #             (self.pi.env.num_envs,), dtype=bool)
+    #         # Retrieve unnormalized observation for saving into the buffer
+    #         if self.pi._vec_normalize_env is not None:
+    #             self.pi._last_original_obs = (
+    #                 self.pi._vec_normalize_env.get_original_obs()
+    #             )
+    #
+    #     if reset_num_timesteps or self.pi_H._last_obs is None:
+    #         assert self.pi_H.env is not None
+    #         # type: ignore[assignment]
+    #         self.pi_H._last_obs = self.pi_H.env.reset()
+    #         self.pi_H._last_episode_starts = np.ones(
+    #             (self.pi_H.env.num_envs,), dtype=bool
+    #         )
+    #         # Retrieve unnormalized observation for saving into the buffer
+    #         if self.pi_H._vec_normalize_env is not None:
+    #             self.pi_H._last_original_obs = (
+    #                 self.pi_H._vec_normalize_env.get_original_obs()
+    #             )
+    #
+    #     # Configure logger's outputs if no logger was passed
+    #     if not self.pi._custom_logger:
+    #         self._logger = configure_logger(
+    #             self.pi.verbose,
+    #             self.pi_H.tensorboard_log,
+    #             tb_log_name,
+    #             reset_num_timesteps,
+    #         )
+    #
+    #     if not self.pi_H._custom_logger:
+    #         self.pi_H._logger = configure_logger(
+    #             self.pi_H.verbose,
+    #             self.pi_H.tensorboard_log,
+    #             tb_log_name,
+    #             reset_num_timesteps,
+    #         )
+    #
+    #     # Create eval callback if needed
+    #     callback = self._init_callback(callback, progress_bar)
+    #
+    #     return total_timesteps, callback
+    #
+    # def _init_callback(
+    #     self,
+    #     callback: MaybeCallback,
+    #     progress_bar: bool = False,
+    # ) -> BaseCallback:
+    #     pass
+    #     # Parameters/functions that shoudlnt be individual to either policy
+    #     # self.num_timesteps
+    #     # self.update_current_progress_remaining()
+    #     # self._total_timesteps
+    #     #
+    #     # Unsure about
+    #     # self.action_noise
+    #     # self._episode_n
+    #     # self._init_callback
+    #
+    # def _update_current_progress_remaining(self, num_timesteps, total_timesteps):
+    #     self._current_progress_remaining = 1.0 - float(num_timesteps) / float(
+    #         total_timesteps
+    #     )
+    #
     def learn(
         self,
         total_timesteps: int,
@@ -513,35 +716,39 @@ class HEPO:
         """
         iteration = 0
 
-        total_timesteps, callback = self._setup_learn(
-            total_timesteps,
-            callback,
-            reset_num_timesteps,
-            tb_log_name,
-            progress_bar,
-        )
+        # total_timesteps, callback = self._setup_learn(
+        #     total_timesteps,
+        #     callback,
+        #     reset_num_timesteps,
+        #     tb_log_name,
+        #     progress_bar,
+        # )
 
-        callback.on_training_start(locals(), globals())
+        # callback.on_training_start(locals(), globals())
 
-        assert self.env1 is not None and self.env2 is not None
+        assert self.pi.env is not None and self.pi_H.env is not None
 
+        self.num_timesteps = 0
         while self.num_timesteps < total_timesteps:
             continue_training = self.collect_rollouts()
 
             if not continue_training:
                 break
 
-            self._update_current_progress_remaining(
-                self.num_timesteps, total_timesteps)
+            # self._update_current_progress_remaining(
+            #     self.num_timesteps, total_timesteps)
 
             if log_interval is not None and iteration % log_interval == 0:
-                assert self.ep_info_buffer is not None
-                self.dump_logs(iteration)
+                assert self.pi.ep_info_buffer is not None
+                self.pi.dump_logs(iteration)
+                assert self.pi_H.ep_info_buffer is not None
+                self.pi_H.dump_logs(iteration)
 
             self.train_pi()
             self.train_pi_H()
             self.train_alpha()
+            self.num_timesteps += 1
 
-        callback.on_training_end()
+        # callback.on_training_end()
 
         return self

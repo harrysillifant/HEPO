@@ -9,3 +9,6 @@ class HEPOActorCriticPolicy(ActorCriticPolicy):
         super()._build(lr_schedule)
         self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 2)
         # maybe need to rewrite whole _build function
+
+
+MlpPolicy = HEPOActorCriticPolicy

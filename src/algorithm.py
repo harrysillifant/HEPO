@@ -1,11 +1,21 @@
 import torch
+import numpy as np
+from gymnasium import spaces
 
 from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
+from stable_baselines3.common.vec_env import VecEnv
+from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.buffers import RolloutBuffer
+from stable_baselines3.common.utils import obs_as_tensor
+
+
 from buffers import HEPOBuffer
 from policies import HEPOActorCriticPolicy
 
 
 class HEPOAlgorithm(OnPolicyAlgorithm):
+    policy_aliases = {"MlpPolicy": HEPOActorCriticPolicy}
+
     def _setup_model(self):
         self._setup_lr_schedule()
         self.set_random_seed(self.seed)
@@ -72,7 +82,7 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                 # Sample a new noise matrix
                 self.policy.reset_noise(env.num_envs)
 
-            with th.no_grad():
+            with torch.no_grad():
                 # Convert to pytorch tensor or to TensorDict
                 # type: ignore[arg-type]
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
@@ -127,7 +137,7 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                     terminal_obs = self.policy.obs_to_tensor(
                         infos[idx]["terminal_observation"]
                     )[0]
-                    with th.no_grad():
+                    with torch.no_grad():
                         terminal_value = self.policy.predict_values(
                             terminal_obs)[0]  # type: ignore[arg-type]
                     rewards[idx] += self.gamma * terminal_value
@@ -145,7 +155,7 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
             self._last_obs = new_obs  # type: ignore[assignment]
             self._last_episode_starts = dones
 
-        with th.no_grad():
+        with torch.no_grad():
             # Compute value for the last timestep
             values = self.policy.predict_values(obs_as_tensor(
                 new_obs, self.device))  # type: ignore[arg-type]

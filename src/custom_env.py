@@ -1,5 +1,9 @@
-import gymnasium as gym
 from typing import Callable, Optional, Dict, Any
+import numpy as np
+
+import gymnasium as gym
+from stable_baselines3.common.vec_env import VecEnvWrapper, VecEnv
+
 
 TaskPredicate = Callable[[Any, float, bool, bool, Dict[str, Any]], bool]
 
