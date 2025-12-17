@@ -13,7 +13,7 @@ from stable_baselines3.common.callbacks import (
     ProgressBarCallback,
 )
 from stable_baselines3.common.type_aliases import MaybeCallback
-from stable_baselines3.common.utils import configure_logger
+from stable_baselines3.common.utils import configure_logger, FloatSchedule
 from gymnasium import spaces
 
 from algorithm import HEPOAlgorithm
@@ -116,32 +116,46 @@ class HEPO:
         self.normalize_advantage = normalize_advantage
         self.target_kl = target_kl
 
-        if _init_setup_model:
-            self.pi._setup_model()
-            self.pi_H._setup_model()
+        self.alpha = 1
 
-    def collect_rollouts(self, callback1=None, callback2=None):
+        if _init_setup_model:
+            self._setup_model()
+
+    def _setup_model(self):
+        self.pi._setup_model()
+        self.pi_H._setup_model()
+        self.clip_range = FloatSchedule(self.clip_range)
+        if self.clip_range_vf is not None:
+            if isinstance(self.clip_range_vf, (float, int)):
+                assert self.clip_range_vf > 0, (
+                    "'clip_range_vf' must be positive, "
+                    "pass 'None' to deactivate vf clipping"
+                )
+            self.clip_range_vf = FloatSchedule(self.clip_range_vf)
+
+    def collect_rollouts(self, pi_callback=None, pi_H_callback=None):
         """
         Generate two buffers
         """
-        self.pi.collect_rollouts(
+        pi_continue_training = self.pi.collect_rollouts(
             self.pi.env,
-            callback1,
+            pi_callback,
             self.pi.rollout_buffer,
             n_rollout_steps=self.pi.n_steps,
         )
-        self.pi_H.collect_rollouts(
-            self.pi_H,
-            callback2,
+        pi_H_continue_training = self.pi_H.collect_rollouts(
+            self.pi_H.env,
+            pi_H_callback,
             self.pi_H.rollout_buffer,
             n_rollout_steps=self.pi_H.n_steps,
         )
+        return pi_continue_training and pi_H_continue_training
 
     def train_pi(self):
         # Switch to train mode (this affects batch norm / dropout)
         self.pi.policy.set_training_mode(True)
         # Update optimizer learning rate
-        self._update_learning_rate(self.policy.optimizer)
+        self.pi._update_learning_rate(self.pi.policy.optimizer)
         # Compute current clip range
         clip_range = self.clip_range(
             self._current_progress_remaining)  # type: ignore[operator]
@@ -171,7 +185,7 @@ class HEPO:
                 pi_actions = pi_rollout_data.actions
                 pi_H_actions = pi_H_rollout_data.actions
 
-                if isinstance(self.action_space, spaces.Discrete):
+                if isinstance(self.pi.action_space, spaces.Discrete):
                     # Convert discrete action from float to long
                     pi_actions = pi_actions.long().flatten()
                     pi_H_actions = pi_H_actions.long().flatten()
@@ -179,13 +193,16 @@ class HEPO:
                 # values, log_prob, entropy = self.policy.evaluate_actions(
                 #     rollout_data.observations, actions
                 # )
-                (task_values, heuristic_values), pi_log_prob, pi_entropy = (
-                    self.pi.policy.evaluate_actions(
-                        pi_rollout_data.observations, pi_actions
-                    )
+
+                pi_values, pi_log_prob, pi_entropy = self.pi.policy.evaluate_actions(
+                    pi_rollout_data.observations, pi_actions
                 )
+
+                task_values, heuristic_values = pi_values[:,
+                                                          0], pi_values[:, 1]
+
                 _, pi_H_log_prob, pi_H_entropy = self.pi.policy.evaluate_actions(
-                    pi_H_rollout_data.observation, pi_H_actions
+                    pi_H_rollout_data.observations, pi_H_actions
                 )
 
                 # maybe get pi_H values here as well
@@ -219,7 +236,6 @@ class HEPO:
                     ) / (pi_H_heuristic_advantages.std() + 1e-8)
 
                 # ratio between old and new policy, should be one at the first iteration
-                # LOG PROB IS WRONG HERE
                 pi_ratio = torch.exp(
                     pi_log_prob - pi_rollout_data.old_log_prob)
                 pi_H_ratio = torch.exp(
@@ -247,8 +263,9 @@ class HEPO:
                 pi_H_policy_loss_2 = pi_H_U * torch.clamp(
                     pi_H_ratio, 1 - clip_range, 1 + clip_range
                 )
-                pi_H_policy_loss = - \
-                    torch.min(pi_H_policy_loss_1, pi_H_policy_loss_2)
+                pi_H_policy_loss = -torch.min(
+                    pi_H_policy_loss_1, pi_H_policy_loss_2
+                ).mean()
 
                 # Logging
                 pi_pg_losses.append(pi_policy_loss.item())
@@ -302,9 +319,9 @@ class HEPO:
                 loss = (
                     pi_policy_loss
                     + pi_H_policy_loss
-                    + self.vf_coef * task_value_loss
-                    + self.vf_coef * heuristic_value_loss
-                    + self.ent_coef * entropy_loss
+                    + self.pi.vf_coef * task_value_loss
+                    + self.pi.vf_coef * heuristic_value_loss
+                    + self.pi.ent_coef * entropy_loss
                 )
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
@@ -331,16 +348,17 @@ class HEPO:
                 self.pi.policy.optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(
-                    self.pi.policy.parameters(), self.max_grad_norm
+                    self.pi.policy.parameters(), self.pi.max_grad_norm
                 )
                 self.pi.policy.optimizer.step()
 
-            self._n_updates += 1
+            self.pi._n_updates += 1
             if not continue_training:
                 break
 
         explained_var = explained_variance(
-            self.rollout_buffer.values.flatten(), self.rollout_buffer.returns.flatten()
+            self.pi.rollout_buffer.values.flatten(),
+            self.pi.rollout_buffer.returns.flatten(),
         )
 
         # Logs
@@ -361,13 +379,13 @@ class HEPO:
         )
         self.pi.logger.record("train/pi/loss", loss.item())
         self.pi.logger.record("train/pi/explained_variance", explained_var)
-        if hasattr(self.policy, "log_std"):
+        if hasattr(self.pi.policy, "log_std"):
             self.pi.logger.record(
-                "train/pi/std", torch.exp(self.pi_policy.log_std).mean().item()
+                "train/pi/std", torch.exp(self.pi.policy.log_std).mean().item()
             )
 
         self.pi.logger.record(
-            "train/pi/n_updates", self._n_updates, exclude="tensorboard"
+            "train/pi/n_updates", self.pi._n_updates, exclude="tensorboard"
         )
         self.pi.logger.record("train/pi/clip_range", clip_range)
         if self.clip_range_vf is not None:
@@ -420,7 +438,7 @@ class HEPO:
                 )
                 (task_values, heuristic_values), pi_H_log_prob, pi_H_entropy = (
                     self.pi.policy.evaluate_actions(
-                        pi_H_rollout_data.observation, pi_H_actions
+                        pi_H_rollout_data.observations, pi_H_actions
                     )
                 )
 
@@ -665,9 +683,9 @@ class HEPO:
 
         # Configure logger's outputs if no logger was passed
         if not self.pi._custom_logger:
-            self._logger = configure_logger(
+            self.pi._logger = configure_logger(
                 self.pi.verbose,
-                self.pi_H.tensorboard_log,
+                self.pi.tensorboard_log,
                 tb_log_name,
                 reset_num_timesteps,
             )
@@ -681,28 +699,10 @@ class HEPO:
             )
 
         # Create eval callback if needed
-        callback = self._init_callback(callback, progress_bar)
+        pi_callback = self.pi._init_callback(callback, progress_bar)
+        pi_H_callback = self.pi_H._init_callback(callback, progress_bar)
 
-        return total_timesteps, callback
-
-    def _init_callback(
-        self,
-        callback: MaybeCallback,
-        progress_bar: bool = False,
-    ) -> BaseCallback:
-        if isinstance(callback, list):
-            callback = CallbackList(callback)
-
-        # Convert functional callback to object
-        if not isinstance(callback, BaseCallback):
-            callback = ConvertCallback(callback)
-
-        # Add progress bar callback
-        if progress_bar:
-            callback = CallbackList([callback, ProgressBarCallback()])
-
-        callback.init_callback(self)
-        return callback
+        return total_timesteps, pi_callback, pi_H_callback
 
     def _update_current_progress_remaining(self, num_timesteps, total_timesteps):
         self._current_progress_remaining = 1.0 - float(num_timesteps) / float(
@@ -723,7 +723,7 @@ class HEPO:
         """
         iteration = 0
 
-        total_timesteps, callback = self._setup_learn(
+        total_timesteps, pi_callback, pi_H_callback = self._setup_learn(
             total_timesteps,
             callback,
             reset_num_timesteps,
@@ -731,15 +731,21 @@ class HEPO:
             progress_bar,
         )
 
-        callback.on_training_start(locals(), globals())
+        pi_callback.on_training_start(locals(), globals())
+        pi_H_callback.on_training_start(locals(), globals())
 
         assert self.pi.env is not None and self.pi_H.env is not None
 
         while self.num_timesteps < total_timesteps:
-            continue_training = self.collect_rollouts()
+            print(f"Iteration: {iteration}")
+            continue_training = self.collect_rollouts(
+                pi_callback=pi_callback, pi_H_callback=pi_H_callback
+            )
 
             if not continue_training:
                 break
+
+            iteration += 1
 
             self._update_current_progress_remaining(
                 self.num_timesteps, total_timesteps)
@@ -755,6 +761,7 @@ class HEPO:
             self.train_alpha()
             self.num_timesteps += 1
 
-        callback.on_training_end()
+        pi_callback.on_training_end()
+        pi_H_callback.on_training_end()
 
         return self

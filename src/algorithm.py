@@ -69,7 +69,7 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
         rollout_buffer.reset()
         # Sample new weights for the state dependent exploration
         if self.use_sde:
-            self.policy.reset_noise(env.num_envs)
+            self.policy.reset_noise(env.n_envs)
 
         callback.on_rollout_start()
 
@@ -80,13 +80,16 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                 and n_steps % self.sde_sample_freq == 0
             ):
                 # Sample a new noise matrix
-                self.policy.reset_noise(env.num_envs)
+                self.policy.reset_noise(env.n_envs)
 
             with torch.no_grad():
                 # Convert to pytorch tensor or to TensorDict
                 # type: ignore[arg-type]
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
                 actions, values, log_probs = self.policy(obs_tensor)
+                task_values = values[:, 0].clone()
+                heuristic_values = values[:, 1].clone()
+                values = torch.sum(values, dim=1)
             actions = actions.cpu().numpy()
 
             # Rescale and perform action
@@ -105,12 +108,14 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                         actions, self.action_space.low, self.action_space.high
                     )
 
-            new_obs, rewards, dones, infos = env.step(
-                clipped_actions
-            )  # shaping and task rewards are in here
+            # shaping and task rewards are in here
+            new_obs, rewards, dones, infos = env.step(clipped_actions)
 
-            heuristic_reward = infos["episode_rewards"]["heuristic_total"]
-            task_reward = infos["episode_rewards"]["task_total"]
+            task_rewards = np.zeros(self.n_envs)
+            heuristic_rewards = np.zeros(self.n_envs)
+            for i in range(self.n_envs):
+                heuristic_rewards[i] = infos[i]["episode_rewards"]["heuristic_total"]
+                task_rewards[i] = infos[i]["episode_rewards"]["task_total"]
 
             self.num_timesteps += env.num_envs
 
@@ -140,18 +145,22 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                     with torch.no_grad():
                         terminal_value = self.policy.predict_values(
                             terminal_obs)[0]  # type: ignore[arg-type]
+                    print("term value", terminal_value)
                     rewards[idx] += self.gamma * terminal_value
 
             rollout_buffer.add(
                 self._last_obs,  # type: ignore[arg-type]
                 actions,
                 rewards,
-                task_reward,
-                heuristic_reward,
+                task_rewards,
+                heuristic_rewards,
                 self._last_episode_starts,  # type: ignore[arg-type]
                 values,
+                task_values,
+                heuristic_values,
                 log_probs,
             )
+
             self._last_obs = new_obs  # type: ignore[assignment]
             self._last_episode_starts = dones
 
@@ -159,9 +168,16 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
             # Compute value for the last timestep
             values = self.policy.predict_values(obs_as_tensor(
                 new_obs, self.device))  # type: ignore[arg-type]
+            task_values = values[:, 0].clone()
+            heuristic_values = values[:, 1].clone()
+            values = torch.sum(values, dim=1)
 
         rollout_buffer.compute_returns_and_advantage(
-            last_values=values, dones=dones)
+            last_values=values,
+            last_values_task=task_values,
+            last_values_heuristic=heuristic_values,
+            dones=dones,
+        )
 
         callback.update_locals(locals())
 

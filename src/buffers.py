@@ -1,8 +1,12 @@
 from stable_baselines3.common.buffers import RolloutBuffer
 from gymnasium import spaces
 import torch
-from typing import Union
+from typing import Union, NamedTuple
+from collections.abc import Generator
 import numpy as np
+
+from stable_baselines3.common.type_aliases import RolloutBufferSamples
+from stable_baselines3.common.vec_env import VecNormalize
 
 
 class HEPOBuffer(RolloutBuffer):
@@ -32,16 +36,36 @@ class HEPOBuffer(RolloutBuffer):
         self.heuristic_rewards = np.zeros(
             (self.buffer_size, self.n_envs), dtype=np.float32
         )
+
+        self.task_returns = np.zeros(
+            (self.buffer_size, self.n_envs), dtype=np.float32)
+        self.heuristic_returns = np.zeros(
+            (self.buffer_size, self.n_envs), dtype=np.float32
+        )
+
+        self.task_values = np.zeros(
+            (self.buffer_size, self.n_envs), dtype=np.float32)
+        self.heuristic_values = np.zeros(
+            (self.buffer_size, self.n_envs), dtype=np.float32
+        )
+
+        self.task_advantages = np.zeros(
+            (self.buffer_size, self.n_envs), dtype=np.float32
+        )
+        self.heuristic_advantages = np.zeros(
+            (self.buffer_size, self.n_envs), dtype=np.float32
+        )
+
         super().reset()
 
-    def compute_returns_and_advantages(
+    def compute_returns_and_advantage(
         self,
         last_values: torch.Tensor,
         last_values_task: torch.Tensor,
         last_values_heuristic: torch.Tensor,
         dones: np.ndarray,
     ) -> None:
-        super().compute_returns_and_advantages(last_values, dones)
+        super().compute_returns_and_advantage(last_values, dones)
         # Should do this on both the heuristic and task rewards
         # Convert to numpy
         last_values_task = last_values_task.clone().cpu(
@@ -97,8 +121,15 @@ class HEPOBuffer(RolloutBuffer):
         heuristic_rewards: np.ndarray,
         episode_start: np.ndarray,
         value: torch.Tensor,
+        task_value: torch.Tensor,
+        heuristic_value: torch.Tensor,
         log_prob: torch.Tensor,
     ) -> None:
+        self.task_rewards[self.pos] = np.array(task_rewards)
+        self.heuristic_rewards[self.pos] = np.array(heuristic_rewards)
+        self.task_values[self.pos] = np.array(task_value)
+        self.heuristic_values[self.pos] = np.array(heuristic_value)
+
         super().add(
             obs=obs,
             action=action,
@@ -107,11 +138,70 @@ class HEPOBuffer(RolloutBuffer):
             value=value,
             log_prob=log_prob,
         )
-        self.task_rewards[self.pos] = np.array(task_rewards)
-        self.heuristic_returns[self.pos] = np.array(heuristic_rewards)
 
-    def get():
-        raise NotImplementedError
+    def get(
+        self, batch_size: int | None = None
+    ) -> Generator[RolloutBufferSamples, None, None]:
+        assert self.full, ""
+        indices = np.random.permutation(self.buffer_size * self.n_envs)
+        # Prepare the data
+        if not self.generator_ready:
+            _tensor_names = [
+                "observations",
+                "actions",
+                "values",
+                "log_probs",
+                "advantages",
+                "task_advantages",
+                "heuristic_advantages",
+                "returns",
+                "task_returns",
+                "heuristic_returns",
+            ]
 
-    def _get_samples():
-        raise NotImplementedError
+            for tensor in _tensor_names:
+                self.__dict__[tensor] = self.swap_and_flatten(
+                    self.__dict__[tensor])
+            self.generator_ready = True
+
+        # Return everything, don't create minibatches
+        if batch_size is None:
+            batch_size = self.buffer_size * self.n_envs
+
+        start_idx = 0
+        while start_idx < self.buffer_size * self.n_envs:
+            yield self._get_samples(indices[start_idx: start_idx + batch_size])
+            start_idx += batch_size
+
+    def _get_samples(
+        self,
+        batch_inds: np.ndarray,
+        env: VecNormalize | None = None,
+    ) -> RolloutBufferSamples:
+        data = (
+            self.observations[batch_inds],
+            # Cast to float32 (backward compatible), this would lead to RuntimeError for MultiBinary space
+            self.actions[batch_inds].astype(np.float32, copy=False),
+            self.values[batch_inds].flatten(),
+            self.log_probs[batch_inds].flatten(),
+            self.advantages[batch_inds].flatten(),
+            self.task_advantages[batch_inds].flatten(),
+            self.heuristic_advantages[batch_inds].flatten(),
+            self.returns[batch_inds].flatten(),
+            self.task_returns[batch_inds].flatten(),
+            self.heuristic_returns[batch_inds].flatten(),
+        )
+        return HEPOBufferSamples(*tuple(map(self.to_torch, data)))
+
+
+class HEPOBufferSamples(NamedTuple):
+    observations: torch.Tensor
+    actions: torch.Tensor
+    old_values: torch.Tensor
+    old_log_prob: torch.Tensor
+    advantages: torch.Tensor
+    task_advantages: torch.Tensor
+    heuristic_advantages: torch.Tensor
+    returns: torch.Tensor
+    task_returns: torch.Tensor
+    heuristic_returns: torch.Tensor
