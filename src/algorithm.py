@@ -145,8 +145,7 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                     with torch.no_grad():
                         terminal_value = self.policy.predict_values(
                             terminal_obs)[0]  # type: ignore[arg-type]
-                    print("term value", terminal_value)
-                    rewards[idx] += self.gamma * terminal_value
+                    rewards[idx] += self.gamma * terminal_value.sum()
 
             rollout_buffer.add(
                 self._last_obs,  # type: ignore[arg-type]

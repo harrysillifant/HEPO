@@ -395,7 +395,7 @@ class HEPO:
         # Switch to train mode (this affects batch norm / dropout)
         self.pi_H.policy.set_training_mode(True)
         # Update optimizer learning rate
-        self._update_learning_rate(self.policy_H.optimizer)
+        self.pi_H._update_learning_rate(self.pi_H.policy.optimizer)
         # Compute current clip range
         clip_range = self.clip_range(
             self._current_progress_remaining)  # type: ignore[operator]
@@ -425,7 +425,7 @@ class HEPO:
                 pi_actions = pi_rollout_data.actions
                 pi_H_actions = pi_H_rollout_data.actions
 
-                if isinstance(self.action_space, spaces.Discrete):
+                if isinstance(self.pi_H.action_space, spaces.Discrete):
                     # Convert discrete action from float to long
                     pi_actions = pi_actions.long().flatten()
                     pi_H_actions = pi_H_actions.long().flatten()
@@ -436,11 +436,13 @@ class HEPO:
                 _, pi_log_prob, pi_entropy = self.pi.policy.evaluate_actions(
                     pi_rollout_data.observations, pi_actions
                 )
-                (task_values, heuristic_values), pi_H_log_prob, pi_H_entropy = (
+                pi_H_values, pi_H_log_prob, pi_H_entropy = (
                     self.pi.policy.evaluate_actions(
                         pi_H_rollout_data.observations, pi_H_actions
                     )
                 )
+                (task_values,
+                 heuristic_values) = pi_H_values[:, 0], pi_H_values[:, 1]
 
                 # maybe get pi_H values here as well
 
@@ -488,8 +490,9 @@ class HEPO:
                 pi_H_policy_loss_2 = pi_H_heuristic_advantages * torch.clamp(
                     pi_H_ratio, 1 - clip_range, 1 + clip_range
                 )
-                pi_H_policy_loss = - \
-                    torch.min(pi_H_policy_loss_1, pi_H_policy_loss_2)
+                pi_H_policy_loss = -torch.min(
+                    pi_H_policy_loss_1, pi_H_policy_loss_2
+                ).mean()
 
                 # Logging
                 pi_pg_losses.append(pi_policy_loss.item())
@@ -542,9 +545,9 @@ class HEPO:
                 loss = (
                     pi_policy_loss
                     + pi_H_policy_loss
-                    + self.vf_coef * task_value_loss
-                    + self.vf_coef * heuristic_value_loss
-                    + self.ent_coef * entropy_loss
+                    + self.pi_H.vf_coef * task_value_loss
+                    + self.pi_H.vf_coef * heuristic_value_loss
+                    + self.pi_H.ent_coef * entropy_loss
                 )
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
@@ -571,16 +574,17 @@ class HEPO:
                 self.pi_H.policy.optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(
-                    self.pi_H.policy.parameters(), self.max_grad_norm
+                    self.pi_H.policy.parameters(), self.pi_H.max_grad_norm
                 )
                 self.pi_H.policy.optimizer.step()
 
-            self._n_updates += 1
+            self.pi_H._n_updates += 1
             if not continue_training:
                 break
 
         explained_var = explained_variance(
-            self.rollout_buffer.values.flatten(), self.rollout_buffer.returns.flatten()
+            self.pi_H.rollout_buffer.values.flatten(),
+            self.pi_H.rollout_buffer.returns.flatten(),
         )
 
         # Logs
@@ -606,14 +610,14 @@ class HEPO:
         )
         self.pi_H.logger.record("train/pi_H/loss", loss.item())
         self.pi_H.logger.record("train/pi_H/explained_variance", explained_var)
-        if hasattr(self.policy, "log_std"):
+        if hasattr(self.pi_H.policy, "log_std"):
             self.pi_H.logger.record(
                 "train/pi_H/std", torch.exp(
-                    self.pi_policy.log_std).mean().item()
+                    self.pi_H.policy.log_std).mean().item()
             )
 
         self.pi_H.logger.record(
-            "train/pi_H/n_updates", self._n_updates, exclude="tensorboard"
+            "train/pi_H/n_updates", self.pi_H._n_updates, exclude="tensorboard"
         )
         self.pi_H.logger.record("train/pi_H/clip_range", clip_range)
         if self.clip_range_vf is not None:
@@ -737,7 +741,6 @@ class HEPO:
         assert self.pi.env is not None and self.pi_H.env is not None
 
         while self.num_timesteps < total_timesteps:
-            print(f"Iteration: {iteration}")
             continue_training = self.collect_rollouts(
                 pi_callback=pi_callback, pi_H_callback=pi_H_callback
             )
