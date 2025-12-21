@@ -1,7 +1,5 @@
 # HEPO
 
-**Heuristic Enhanced Policy Optimization (HEPO)** is built on top of **Stable-Baselines3**
-
 ---
 
 ## Overview
