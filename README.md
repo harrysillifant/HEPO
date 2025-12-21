@@ -19,8 +19,8 @@ HEPO follows an on-policy training paradigm similar to PPO. During rollouts, bot
 ## Installation
 
 ```bash
-git clone https://github.com/hacosi/HEPO.git
-cd HEPO
+git clone https://github.com/hacosi/hepo.git
+cd hepo 
 pip install -r requirements.txt
 ```
 
@@ -30,10 +30,10 @@ pip install -r requirements.txt
 ## Usage
 
 ```python
-from hepo.hepo import HEPO
+from hepo import HEPO
 from stable_baselines3.common.env_util import make_vec_env
 
-env = make_vec_env("CartPole-v1", n_envs=4)
+env = make_vec_env("LunarLander-v3", n_envs=4)
 
 model = HEPO(
     policy="MlpPolicy",
