@@ -1,6 +1,6 @@
 # HEPO
 
-**Heuristic Enhanced Policy Optimization (HEPO)** is a research-oriented reinforcement learning codebase built on top of **Stable-Baselines3**. The goal of this project is to study how auxiliary heuristic reward signals can be incorporated into on-policy policy gradient methods to improve learning efficiency, particularly in environments with sparse or poorly shaped task rewards.
+**Heuristic Enhanced Policy Optimization (HEPO)** is built on top of **Stable-Baselines3**
 
 ---
 
@@ -24,11 +24,14 @@ HEPO follows an on-policy training paradigm similar to PPO. During rollouts, bot
 git clone https://github.com/hacosi/HEPO.git
 cd HEPO
 pip install -r requirements.txt
+```
+
 
 ---
 
 ## Usage
 
+```python
 from hepo.hepo import HEPO
 from stable_baselines3.common.env_util import make_vec_env
 
@@ -41,3 +44,5 @@ model = HEPO(
 )
 
 model.learn(total_timesteps=1_000_000)
+```
+
