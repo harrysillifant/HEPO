@@ -767,8 +767,6 @@ class HEPO:
             self.train_pi()
             self.train_pi_H()
             self.train_alpha()
-            print(self.num_timesteps, self.pi.num_timesteps,
-                  self.pi_H.num_timesteps)
 
         pi_callback.on_training_end()
         pi_H_callback.on_training_end()

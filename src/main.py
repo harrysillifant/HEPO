@@ -23,7 +23,8 @@ if __name__ == "__main__":
     #     render=True,
     # )
     #
-    model = HEPO("MlpPolicy", env1=env1, env2=env2,
-                 tensorboard_log="./hepo_tb_logs/")
+    model = HEPO(
+        "MlpPolicy", env1=env1, env2=env2, tensorboard_log="./hepovsppo_tb_logs/"
+    )
 
-    model.learn(total_timesteps=100000, progress_bar=True)
+    model.learn(total_timesteps=100_000, progress_bar=True)
