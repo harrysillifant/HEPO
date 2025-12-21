@@ -51,6 +51,8 @@ class HEPO:
         device="auto",
         _init_setup_model=True,
     ):
+        pass
+
         self.pi = HEPOAlgorithm(
             policy=policy,
             env=env1,
@@ -149,6 +151,7 @@ class HEPO:
             self.pi_H.rollout_buffer,
             n_rollout_steps=self.pi_H.n_steps,
         )
+        self.num_timesteps = self.pi.num_timesteps  # maybe + self.pi_H.num_timesteps
         return pi_continue_training and pi_H_continue_training
 
     def train_pi(self):
@@ -653,6 +656,8 @@ class HEPO:
             self.pi_H.action_noise.reset()
 
         if reset_num_timesteps:
+            self.pi.num_timesteps = 0
+            self.pi_H.num_timesteps = 0
             self.num_timesteps = 0
             self._episode_num = 0
         else:
@@ -690,7 +695,7 @@ class HEPO:
             self.pi._logger = configure_logger(
                 self.pi.verbose,
                 self.pi.tensorboard_log,
-                tb_log_name,
+                tb_log_name + "_pi",
                 reset_num_timesteps,
             )
 
@@ -698,7 +703,7 @@ class HEPO:
             self.pi_H._logger = configure_logger(
                 self.pi_H.verbose,
                 self.pi_H.tensorboard_log,
-                tb_log_name,
+                tb_log_name + "_pi_H",
                 reset_num_timesteps,
             )
 
@@ -718,7 +723,7 @@ class HEPO:
         total_timesteps: int,
         callback: MaybeCallback = None,
         log_interval: int = 1,
-        tb_log_name: str = "PPO",
+        tb_log_name: str = "HEPO",
         reset_num_timesteps: bool = True,
         progress_bar: bool = False,
     ):
@@ -762,7 +767,8 @@ class HEPO:
             self.train_pi()
             self.train_pi_H()
             self.train_alpha()
-            self.num_timesteps += 1
+            print(self.num_timesteps, self.pi.num_timesteps,
+                  self.pi_H.num_timesteps)
 
         pi_callback.on_training_end()
         pi_H_callback.on_training_end()

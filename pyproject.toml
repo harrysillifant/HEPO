@@ -8,5 +8,6 @@ dependencies = [
     "gymnasium[box2d]>=1.2.2",
     "numpy>=2.3.5",
     "stable-baselines3[extra]>=2.7.0",
+    "tensorboard>=2.20.0",
     "torch>=2.9.1",
 ]
