@@ -30,17 +30,19 @@ pip install -r requirements.txt
 ## Usage
 
 ```python
-from hepo import HEPO
+
+from hepo import HEPO, VectorizedRewardSplitWrapper
 from stable_baselines3.common.env_util import make_vec_env
 
-env = make_vec_env("LunarLander-v3", n_envs=4)
+env1 = VectorizedRewardSplitWrapper(make_vec_env("LunarLander-v3", n_envs=4))
+env2 = VectorizedRewardSplitWrapper(make_vec_env("LunarLander-v3", n_envs=4))
 
 model = HEPO(
     policy="MlpPolicy",
-    env=env,
-    verbose=1,
-)
+    env1=env1,
+    env2=env2,
+    tensorboard_log="./hepo_logs/")
 
-model.learn(total_timesteps=1_000_000)
+model.learn(total_timesteps=1_000_000, progress_bar=True)
 ```
 
