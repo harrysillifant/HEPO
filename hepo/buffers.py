@@ -65,6 +65,9 @@ class HEPOBuffer(RolloutBuffer):
         last_values_heuristic: torch.Tensor,
         dones: np.ndarray,
     ) -> None:
+        """
+        broken
+        """
         super().compute_returns_and_advantage(last_values, dones)
         # Should do this on both the heuristic and task rewards
         # Convert to numpy
@@ -79,20 +82,20 @@ class HEPOBuffer(RolloutBuffer):
                 next_non_terminal = 1.0 - dones.astype(np.float32)
                 next_values_task = last_values_task
                 next_values_heuristic = last_values_heuristic
-
             else:
                 next_non_terminal = 1.0 - self.episode_starts[step + 1]
-                next_values_task = self.values[step + 1]
-                next_values_heuristic = self.values[step + 1]
+                next_values_task = self.task_values[step + 1]
+                next_values_heuristic = self.heuristic_values[step + 1]
+
             delta_task = (
-                self.rewards[step]
+                self.task_rewards[step]
                 + self.gamma * next_values_task * next_non_terminal
-                - self.values[step]
+                - self.task_values[step]
             )
             delta_heuristic = (
-                self.rewards[step]
+                self.heuristic_rewards[step]
                 + self.gamma * next_values_heuristic * next_non_terminal
-                - self.values[step]
+                - self.heuristic_values[step]
             )
             last_gae_lam_task = (
                 delta_task

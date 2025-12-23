@@ -118,7 +118,7 @@ class HEPO:
         self.normalize_advantage = normalize_advantage
         self.target_kl = target_kl
 
-        self.alpha = 1
+        self.alpha = 0
 
         if _init_setup_model:
             self._setup_model()
@@ -151,7 +151,6 @@ class HEPO:
             self.pi_H.rollout_buffer,
             n_rollout_steps=self.pi_H.n_steps,
         )
-        self.num_timesteps = self.pi.num_timesteps  # maybe + self.pi_H.num_timesteps
         return pi_continue_training and pi_H_continue_training
 
     def train_pi(self):
@@ -193,10 +192,6 @@ class HEPO:
                     pi_actions = pi_actions.long().flatten()
                     pi_H_actions = pi_H_actions.long().flatten()
 
-                # values, log_prob, entropy = self.policy.evaluate_actions(
-                #     rollout_data.observations, actions
-                # )
-
                 pi_values, pi_log_prob, pi_entropy = self.pi.policy.evaluate_actions(
                     pi_rollout_data.observations, pi_actions
                 )
@@ -208,14 +203,14 @@ class HEPO:
                     pi_H_rollout_data.observations, pi_H_actions
                 )
 
-                # maybe get pi_H values here as well
-
                 task_values = task_values.flatten()
                 heuristic_values = heuristic_values.flatten()
 
                 # Normalize advantage
                 pi_task_advantages = pi_rollout_data.task_advantages
                 pi_heuristic_advantages = pi_rollout_data.heuristic_advantages
+                pi_advantages = pi_rollout_data.advantages
+
                 pi_H_task_advantages = pi_H_rollout_data.task_advantages
                 pi_H_heuristic_advantages = pi_H_rollout_data.heuristic_advantages
 
@@ -237,6 +232,9 @@ class HEPO:
                     pi_H_heuristic_advantages = (
                         pi_H_heuristic_advantages - pi_H_heuristic_advantages.mean()
                     ) / (pi_H_heuristic_advantages.std() + 1e-8)
+                    pi_advantages = (pi_advantages - pi_advantages.mean()) / (
+                        pi_advantages + 1e-8
+                    )
 
                 # ratio between old and new policy, should be one at the first iteration
                 pi_ratio = torch.exp(
@@ -251,11 +249,16 @@ class HEPO:
                 # )
                 # policy_loss = -th.min(policy_loss_1, policy_loss_2).mean()
 
-                pi_U = (1 + self.alpha) * pi_task_advantages + \
+                pi_U = (
+                    (1 + self.alpha) * pi_task_advantages +
                     pi_heuristic_advantages
+                    # -> an implementation trick is to times it by 1/(1+self.alpha) (optional)
+                )
+
                 pi_H_U = (
                     1 + self.alpha
                 ) * pi_H_task_advantages + pi_H_heuristic_advantages
+
                 pi_policy_loss_1 = pi_U * pi_ratio
                 pi_policy_loss_2 = pi_U * torch.clamp(
                     pi_ratio, 1 - clip_range, 1 + clip_range
@@ -268,6 +271,11 @@ class HEPO:
                 )
                 pi_H_policy_loss = -torch.min(
                     pi_H_policy_loss_1, pi_H_policy_loss_2
+                ).mean()
+                test_pi_policy_loss = -torch.min(
+                    pi_advantages * pi_ratio,
+                    pi_advantages
+                    * torch.clamp(pi_ratio, 1 - clip_range, 1 + clip_range),
                 ).mean()
 
                 # Logging
@@ -320,8 +328,9 @@ class HEPO:
 
                 # Note entropy loss only depends on the entropy calculated from the pi trajectory
                 loss = (
-                    pi_policy_loss
-                    + pi_H_policy_loss
+                    # pi_policy_loss
+                    # + pi_H_policy_loss
+                    test_pi_policy_loss
                     + self.pi.vf_coef * task_value_loss
                     + self.pi.vf_coef * heuristic_value_loss
                     + self.pi.ent_coef * entropy_loss
@@ -658,13 +667,12 @@ class HEPO:
         if reset_num_timesteps:
             self.pi.num_timesteps = 0
             self.pi_H.num_timesteps = 0
-            self.num_timesteps = 0
             self._episode_num = 0
         else:
-            total_timesteps += self.num_timesteps
+            total_timesteps += self.pi.num_timesteps
 
         self._total_timesteps = total_timesteps
-        self._num_timesteps_at_start = self.num_timesteps
+        self._num_timesteps_at_start = self.pi.num_timesteps
 
         if reset_num_timesteps or self.pi._last_obs is None:
             assert self.pi.env is not None
@@ -745,7 +753,7 @@ class HEPO:
 
         assert self.pi.env is not None and self.pi_H.env is not None
 
-        while self.num_timesteps < total_timesteps:
+        while self.pi.num_timesteps < total_timesteps:
             continue_training = self.collect_rollouts(
                 pi_callback=pi_callback, pi_H_callback=pi_H_callback
             )
@@ -756,7 +764,8 @@ class HEPO:
             iteration += 1
 
             self._update_current_progress_remaining(
-                self.num_timesteps, total_timesteps)
+                self.pi.num_timesteps, total_timesteps
+            )
 
             if log_interval is not None and iteration % log_interval == 0:
                 assert self.pi.ep_info_buffer is not None
