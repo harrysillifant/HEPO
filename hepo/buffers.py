@@ -124,14 +124,14 @@ class HEPOBuffer(RolloutBuffer):
         heuristic_rewards: np.ndarray,
         episode_start: np.ndarray,
         value: torch.Tensor,
-        task_value: torch.Tensor,
-        heuristic_value: torch.Tensor,
+        task_values: torch.Tensor,
+        heuristic_values: torch.Tensor,
         log_prob: torch.Tensor,
     ) -> None:
         self.task_rewards[self.pos] = np.array(task_rewards)
         self.heuristic_rewards[self.pos] = np.array(heuristic_rewards)
-        self.task_values[self.pos] = np.array(task_value)
-        self.heuristic_values[self.pos] = np.array(heuristic_value)
+        self.task_values[self.pos] = np.array(task_values)
+        self.heuristic_values[self.pos] = np.array(heuristic_values)
 
         super().add(
             obs=obs,
@@ -186,6 +186,8 @@ class HEPOBuffer(RolloutBuffer):
             # Cast to float32 (backward compatible), this would lead to RuntimeError for MultiBinary space
             self.actions[batch_inds].astype(np.float32, copy=False),
             self.values[batch_inds].flatten(),
+            self.task_values[batch_inds].flatten(),
+            self.heuristic_values[batch_inds].flatten(),
             self.log_probs[batch_inds].flatten(),
             self.advantages[batch_inds].flatten(),
             self.task_advantages[batch_inds].flatten(),
@@ -201,6 +203,8 @@ class HEPOBufferSamples(NamedTuple):
     observations: torch.Tensor
     actions: torch.Tensor
     old_values: torch.Tensor
+    old_task_values: torch.Tensor
+    old_heuristic_values: torch.Tensor
     old_log_prob: torch.Tensor
     advantages: torch.Tensor
     task_advantages: torch.Tensor

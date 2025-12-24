@@ -198,6 +198,8 @@ class HEPO:
 
                 task_values, heuristic_values = pi_values[:,
                                                           0], pi_values[:, 1]
+                # Sanity Check
+                values = pi_values.sum(dim=1)
 
                 _, pi_H_log_prob, pi_H_entropy = self.pi.policy.evaluate_actions(
                     pi_H_rollout_data.observations, pi_H_actions
@@ -206,9 +208,13 @@ class HEPO:
                 task_values = task_values.flatten()
                 heuristic_values = heuristic_values.flatten()
 
-                # Normalize advantage
+                # Sanity Check
+                values = values.flatten()
+
                 pi_task_advantages = pi_rollout_data.task_advantages
                 pi_heuristic_advantages = pi_rollout_data.heuristic_advantages
+
+                # Sanity Check
                 pi_advantages = pi_rollout_data.advantages
 
                 pi_H_task_advantages = pi_H_rollout_data.task_advantages
@@ -232,6 +238,8 @@ class HEPO:
                     pi_H_heuristic_advantages = (
                         pi_H_heuristic_advantages - pi_H_heuristic_advantages.mean()
                     ) / (pi_H_heuristic_advantages.std() + 1e-8)
+
+                    # Sanity Check
                     pi_advantages = (pi_advantages - pi_advantages.mean()) / (
                         pi_advantages + 1e-8
                     )
@@ -272,6 +280,8 @@ class HEPO:
                 pi_H_policy_loss = -torch.min(
                     pi_H_policy_loss_1, pi_H_policy_loss_2
                 ).mean()
+
+                # Sanity Check
                 test_pi_policy_loss = -torch.min(
                     pi_advantages * pi_ratio,
                     pi_advantages
@@ -294,16 +304,27 @@ class HEPO:
                     # No clipping
                     task_values_pred = task_values
                     heuristic_values_pred = heuristic_values
+                    values_pred = values
                 else:
                     # Clip the difference between old and new value
                     # NOTE: this depends on the reward scaling
-                    task_values_pred = pi_rollout_data.old_values + torch.clamp(
-                        task_values - pi_rollout_data.old_values,
+                    task_values_pred = pi_rollout_data.old_task_values + torch.clamp(
+                        task_values - pi_rollout_data.old_task_values,
                         -clip_range_vf,
                         clip_range_vf,
                     )
-                    heuristic_values_pred = pi_rollout_data.old_values + torch.clamp(
-                        heuristic_values - pi_rollout_data.old_values,
+                    heuristic_values_pred = (
+                        pi_rollout_data.old_heuristic_values
+                        + torch.clamp(
+                            heuristic_values - pi_rollout_data.old_heuristic_values,
+                            -clip_range_vf,
+                            clip_range_vf,
+                        )
+                    )
+
+                    # Sanity Check
+                    values_pred = pi_rollout_data.old_values.sum(dim=1) + torch.clamp(
+                        values - pi_rollout_data.old_values.sum(dim=1),
                         -clip_range_vf,
                         clip_range_vf,
                     )
@@ -318,6 +339,9 @@ class HEPO:
                 )
                 heuristic_value_losses.append(heuristic_value_loss.item())
 
+                # Sanity Check
+                value_loss = F.mse_loss(pi_rollout_data.returns, values_pred)
+
                 if pi_entropy is None:
                     # Approximate entropy when no analytical form
                     entropy_loss = -torch.mean(-pi_log_prob)
@@ -327,12 +351,18 @@ class HEPO:
                 entropy_losses.append(entropy_loss.item())
 
                 # Note entropy loss only depends on the entropy calculated from the pi trajectory
+                # loss = (
+                #     pi_policy_loss
+                #     + pi_H_policy_loss
+                #     + self.pi.vf_coef * task_value_loss
+                #     + self.pi.vf_coef * heuristic_value_loss
+                #     + self.pi.ent_coef * entropy_loss
+                # )
+
+                # Sanity Check
                 loss = (
-                    # pi_policy_loss
-                    # + pi_H_policy_loss
                     test_pi_policy_loss
-                    + self.pi.vf_coef * task_value_loss
-                    + self.pi.vf_coef * heuristic_value_loss
+                    + self.pi.vf_coef * value_loss
                     + self.pi.ent_coef * entropy_loss
                 )
 
