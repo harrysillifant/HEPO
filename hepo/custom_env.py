@@ -84,7 +84,9 @@ class VectorizedRewardSplitWrapper(VecEnvWrapper):
         if task_predicate is None:
 
             def default_pred(next_obs, reward, terminated, truncated, info):
-                return bool(terminated and (not truncated) and (reward > 0))
+                return bool(
+                    terminated and (not truncated)
+                )  # should remove reward > 0 condition as some task rewards can be negative
 
             task_predicate = default_pred
 
@@ -123,15 +125,14 @@ class VectorizedRewardSplitWrapper(VecEnvWrapper):
                 if infos[i].get("TimeLimit.truncated", False):
                     truncated = True
 
-            try:
-                is_task = bool(
-                    self.task_predicate(
-                        next_obs, reward, terminated, truncated, info)
-                )
-            except Exception:
-                is_task = bool(terminated and (not truncated) and (reward > 0))
+            is_task = bool(
+                self.task_predicate(
+                    next_obs, reward, terminated, truncated, info)
+            )
 
             if is_task:
+                if reward > 0:
+                    breakpoint()
                 task_r = float(reward)
                 heuristic_r = 0.0
             else:

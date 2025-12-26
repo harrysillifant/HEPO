@@ -199,7 +199,9 @@ class HEPO:
                 task_values, heuristic_values = pi_values[:,
                                                           0], pi_values[:, 1]
                 # Sanity Check
-                values = pi_values.sum(dim=1)
+                # values = pi_values.sum(dim=1) # sum values
+                # values = task_values.clone()
+                values = task_values + heuristic_values
 
                 _, pi_H_log_prob, pi_H_entropy = self.pi.policy.evaluate_actions(
                     pi_H_rollout_data.observations, pi_H_actions
@@ -323,8 +325,8 @@ class HEPO:
                     )
 
                     # Sanity Check
-                    values_pred = pi_rollout_data.old_values.sum(dim=1) + torch.clamp(
-                        values - pi_rollout_data.old_values.sum(dim=1),
+                    values_pred = pi_rollout_data.old_values + torch.clamp(
+                        values - pi_rollout_data.old_values,
                         -clip_range_vf,
                         clip_range_vf,
                     )
@@ -804,8 +806,8 @@ class HEPO:
                 self.pi_H.dump_logs(iteration)
 
             self.train_pi()
-            self.train_pi_H()
-            self.train_alpha()
+            # self.train_pi_H()
+            # self.train_alpha()
 
         pi_callback.on_training_end()
         pi_H_callback.on_training_end()

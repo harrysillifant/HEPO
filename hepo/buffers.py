@@ -65,11 +65,7 @@ class HEPOBuffer(RolloutBuffer):
         last_values_heuristic: torch.Tensor,
         dones: np.ndarray,
     ) -> None:
-        """
-        broken
-        """
         super().compute_returns_and_advantage(last_values, dones)
-        # Should do this on both the heuristic and task rewards
         # Convert to numpy
         last_values_task = last_values_task.clone().cpu(
         ).numpy().flatten()  # type: ignore[assignment]
@@ -120,18 +116,18 @@ class HEPOBuffer(RolloutBuffer):
         obs: np.ndarray,
         action: np.ndarray,
         reward: np.ndarray,
-        task_rewards: np.ndarray,
-        heuristic_rewards: np.ndarray,
+        task_reward: np.ndarray,
+        heuristic_reward: np.ndarray,
         episode_start: np.ndarray,
         value: torch.Tensor,
-        task_values: torch.Tensor,
-        heuristic_values: torch.Tensor,
+        task_value: torch.Tensor,
+        heuristic_value: torch.Tensor,
         log_prob: torch.Tensor,
     ) -> None:
-        self.task_rewards[self.pos] = np.array(task_rewards)
-        self.heuristic_rewards[self.pos] = np.array(heuristic_rewards)
-        self.task_values[self.pos] = np.array(task_values)
-        self.heuristic_values[self.pos] = np.array(heuristic_values)
+        self.task_rewards[self.pos] = np.array(task_reward)
+        self.heuristic_rewards[self.pos] = np.array(heuristic_reward)
+        self.task_values[self.pos] = np.array(task_value)
+        self.heuristic_values[self.pos] = np.array(heuristic_value)
 
         super().add(
             obs=obs,
@@ -153,6 +149,8 @@ class HEPOBuffer(RolloutBuffer):
                 "observations",
                 "actions",
                 "values",
+                "task_values",
+                "heuristic_values",
                 "log_probs",
                 "advantages",
                 "task_advantages",
