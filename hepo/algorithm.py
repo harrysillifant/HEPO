@@ -151,17 +151,19 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                             terminal_obs)[0]  # type: ignore[arg-type]
                     rewards[idx] += self.gamma * terminal_value.sum()
 
+            # should this be non-vectorized
             rollout_buffer.add(
-                self._last_obs,  # type: ignore[arg-type]
-                actions,
-                rewards,
-                task_rewards,
-                heuristic_rewards,
-                self._last_episode_starts,  # type: ignore[arg-type]
-                values,
-                task_values,
-                heuristic_values,
-                log_probs,
+                obs=self._last_obs,  # type: ignore[arg-type]
+                action=actions,
+                reward=rewards,
+                task_reward=task_rewards,
+                heuristic_reward=heuristic_rewards,
+                # type: ignore[arg-type]
+                episode_start=self._last_episode_starts,
+                value=values,
+                task_value=task_values,
+                heuristic_value=heuristic_values,
+                log_prob=log_probs,
             )
 
             self._last_obs = new_obs  # type: ignore[assignment]

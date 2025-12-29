@@ -1,6 +1,5 @@
-import gymnasium as gym
 from hepo import HEPO
-from custom_env import RewardSplitWrapper, VectorizedRewardSplitWrapper
+from custom_env import VectorizedRewardSplitWrapper
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.callbacks import EvalCallback
 

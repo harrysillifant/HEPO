@@ -4,7 +4,6 @@ import torch.nn.functional as F
 import time
 from collections import deque
 
-from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
 from stable_baselines3.common.utils import explained_variance
 from stable_baselines3.common.callbacks import (
     BaseCallback,
@@ -17,7 +16,6 @@ from stable_baselines3.common.utils import configure_logger, FloatSchedule
 from gymnasium import spaces
 
 from algorithm import HEPOAlgorithm
-from policies import HEPOActorCriticPolicy
 
 
 class HEPO:
@@ -151,7 +149,7 @@ class HEPO:
             self.pi_H.rollout_buffer,
             n_rollout_steps=self.pi_H.n_steps,
         )
-        return pi_continue_training and pi_H_continue_training
+        return pi_continue_training  # and pi_H_continue_training
 
     def train_pi(self):
         # Switch to train mode (this affects batch norm / dropout)
@@ -184,6 +182,8 @@ class HEPO:
                 self.pi.rollout_buffer.get(self.batch_size),
                 self.pi_H.rollout_buffer.get(self.batch_size),
             ):
+                breakpoint()
+                # RETURNS ARE DIFFERENT TO REWARDS!!! returns = advantages + values -> is this weird?
                 pi_actions = pi_rollout_data.actions
                 pi_H_actions = pi_H_rollout_data.actions
 
@@ -199,8 +199,6 @@ class HEPO:
                 task_values, heuristic_values = pi_values[:,
                                                           0], pi_values[:, 1]
                 # Sanity Check
-                # values = pi_values.sum(dim=1) # sum values
-                # values = task_values.clone()
                 values = task_values + heuristic_values
 
                 _, pi_H_log_prob, pi_H_entropy = self.pi.policy.evaluate_actions(
@@ -251,13 +249,6 @@ class HEPO:
                     pi_log_prob - pi_rollout_data.old_log_prob)
                 pi_H_ratio = torch.exp(
                     pi_H_log_prob - pi_H_rollout_data.old_log_prob)
-
-                # clipped surrogate loss
-                # policy_loss_1 = advantages * ratio
-                # policy_loss_2 = advantages * th.clamp(
-                #     ratio, 1 - clip_range, 1 + clip_range
-                # )
-                # policy_loss = -th.min(policy_loss_1, policy_loss_2).mean()
 
                 pi_U = (
                     (1 + self.alpha) * pi_task_advantages +
