@@ -86,13 +86,13 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                 # Convert to pytorch tensor or to TensorDict
                 # type: ignore[arg-type]
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
-                actions, value_outputs, log_probs = self.policy(obs_tensor)
+                actions, values, log_probs = self.policy(obs_tensor)
                 # task_values = values[:, 0].clone()
                 # heuristic_values = values[:, 1].clone()
                 # values = torch.sum(values, dim=1)
-                task_values = value_outputs[:, 0]
-                heuristic_values = value_outputs[:, 1]
-                values = task_values + heuristic_values
+                # task_values = value_outputs[:, 0]
+                # heuristic_values = value_outputs[:, 1]
+                # values = task_values + heuristic_values
 
             actions = actions.cpu().numpy()
 
@@ -149,7 +149,7 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                     with torch.no_grad():
                         terminal_value = self.policy.predict_values(
                             terminal_obs)[0]  # type: ignore[arg-type]
-                    rewards[idx] += self.gamma * terminal_value.sum()
+                    rewards[idx] += self.gamma * terminal_value
 
             # should this be non-vectorized
             rollout_buffer.add(
@@ -161,8 +161,8 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                 # type: ignore[arg-type]
                 episode_start=self._last_episode_starts,
                 value=values,
-                task_value=task_values,
-                heuristic_value=heuristic_values,
+                # task_value=task_values,
+                # heuristic_value=heuristic_values,
                 log_prob=log_probs,
             )
 
@@ -171,20 +171,19 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
 
         with torch.no_grad():
             # Compute value for the last timestep
-            value_preds = self.policy.predict_values(
-                obs_as_tensor(new_obs, self.device)
-            )  # type: ignore[arg-type]
+            values = self.policy.predict_values(obs_as_tensor(
+                new_obs, self.device))  # type: ignore[arg-type]
             # task_values = values[:, 0].clone()
             # heuristic_values = values[:, 1].clone()
             # values = torch.sum(values, dim=1)
-            task_values = value_preds[:, 0]
-            heuristic_values = value_preds[:, 1]
-            values = task_values + heuristic_values
+            # task_values = value_preds[:, 0]
+            # heuristic_values = value_preds[:, 1]
+            # values = task_values + heuristic_values
 
         rollout_buffer.compute_returns_and_advantage(
             last_values=values,
-            last_values_task=task_values,
-            last_values_heuristic=heuristic_values,
+            # last_values_task=task_values,
+            # last_values_heuristic=heuristic_values,
             dones=dones,
         )
 
