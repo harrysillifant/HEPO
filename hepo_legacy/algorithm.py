@@ -9,20 +9,18 @@ from stable_baselines3.common.buffers import RolloutBuffer
 from stable_baselines3.common.utils import obs_as_tensor
 
 
-# from buffers import HEPOBuffer
-# from policies import HEPOActorCriticPolicy
-from stable_baselines3.common.policies import ActorCriticPolicy
+from buffers import HEPOBuffer
+from policies import HEPOActorCriticPolicy
 
 
 class HEPOAlgorithm(OnPolicyAlgorithm):
-    # policy_aliases = {"MlpPolicy": HEPOActorCriticPolicy}
-    policy_aliases = {"MlpPolicy": ActorCriticPolicy}
+    policy_aliases = {"MlpPolicy": HEPOActorCriticPolicy}
 
     def _setup_model(self):
         self._setup_lr_schedule()
         self.set_random_seed(self.seed)
 
-        self.rollout_buffer = RolloutBuffer(
+        self.rollout_buffer = HEPOBuffer(
             self.n_steps,
             self.observation_space,
             self.action_space,
@@ -33,7 +31,7 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
             **self.rollout_buffer_kwargs,
         )
 
-        self.policy = ActorCriticPolicy(
+        self.policy = HEPOActorCriticPolicy(
             self.observation_space,
             self.action_space,
             self.lr_schedule,
@@ -49,7 +47,20 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
         callback: BaseCallback,
         rollout_buffer: RolloutBuffer,
         n_rollout_steps: int,
-    ):
+    ) -> bool:
+        """
+        Collect experiences using the current policy and fill a ``RolloutBuffer``.
+        The term rollout here refers to the model-free notion and should not
+        be used with the concept of rollout used in model-based RL or planning.
+
+        :param env: The training environment
+        :param callback: Callback that will be called at each step
+            (and at the beginning and end of the rollout)
+        :param rollout_buffer: Buffer to fill with rollouts
+        :param n_rollout_steps: Number of experiences to collect per environment
+        :return: True if function returned with at least `n_rollout_steps`
+            collected, False if callback terminated rollout prematurely.
+        """
         assert self._last_obs is not None, "No previous observation was provided"
         # Switch to eval mode (this affects batch norm / dropout)
         self.policy.set_training_mode(False)
@@ -58,7 +69,7 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
         rollout_buffer.reset()
         # Sample new weights for the state dependent exploration
         if self.use_sde:
-            self.policy.reset_noise(env.num_envs)
+            self.policy.reset_noise(env.n_envs)
 
         callback.on_rollout_start()
 
@@ -69,13 +80,20 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                 and n_steps % self.sde_sample_freq == 0
             ):
                 # Sample a new noise matrix
-                self.policy.reset_noise(env.num_envs)
+                self.policy.reset_noise(env.n_envs)
 
             with torch.no_grad():
                 # Convert to pytorch tensor or to TensorDict
                 # type: ignore[arg-type]
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
                 actions, values, log_probs = self.policy(obs_tensor)
+                # task_values = values[:, 0].clone()
+                # heuristic_values = values[:, 1].clone()
+                # values = torch.sum(values, dim=1)
+                # task_values = value_outputs[:, 0]
+                # heuristic_values = value_outputs[:, 1]
+                # values = task_values + heuristic_values
+
             actions = actions.cpu().numpy()
 
             # Rescale and perform action
@@ -94,7 +112,14 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                         actions, self.action_space.low, self.action_space.high
                     )
 
+            # shaping and task rewards are in here
             new_obs, rewards, dones, infos = env.step(clipped_actions)
+
+            task_rewards = np.zeros(self.n_envs)
+            heuristic_rewards = np.zeros(self.n_envs)
+            for i in range(self.n_envs):
+                heuristic_rewards[i] = infos[i]["episode_rewards"]["heuristic_total"]
+                task_rewards[i] = infos[i]["episode_rewards"]["task_total"]
 
             self.num_timesteps += env.num_envs
 
@@ -126,14 +151,21 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                             terminal_obs)[0]  # type: ignore[arg-type]
                     rewards[idx] += self.gamma * terminal_value
 
+            # should this be non-vectorized
             rollout_buffer.add(
-                self._last_obs,  # type: ignore[arg-type]
-                actions,
-                rewards,
-                self._last_episode_starts,  # type: ignore[arg-type]
-                values,
-                log_probs,
+                obs=self._last_obs,  # type: ignore[arg-type]
+                action=actions,
+                reward=rewards,
+                task_reward=task_rewards,
+                heuristic_reward=heuristic_rewards,
+                # type: ignore[arg-type]
+                episode_start=self._last_episode_starts,
+                value=values,
+                # task_value=task_values,
+                # heuristic_value=heuristic_values,
+                log_prob=log_probs,
             )
+
             self._last_obs = new_obs  # type: ignore[assignment]
             self._last_episode_starts = dones
 
@@ -141,9 +173,19 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
             # Compute value for the last timestep
             values = self.policy.predict_values(obs_as_tensor(
                 new_obs, self.device))  # type: ignore[arg-type]
+            # task_values = values[:, 0].clone()
+            # heuristic_values = values[:, 1].clone()
+            # values = torch.sum(values, dim=1)
+            # task_values = value_preds[:, 0]
+            # heuristic_values = value_preds[:, 1]
+            # values = task_values + heuristic_values
 
         rollout_buffer.compute_returns_and_advantage(
-            last_values=values, dones=dones)
+            last_values=values,
+            # last_values_task=task_values,
+            # last_values_heuristic=heuristic_values,
+            dones=dones,
+        )
 
         callback.update_locals(locals())
 
