@@ -36,10 +36,8 @@ class HEPOBuffer(RolloutBuffer):
         super().reset()
 
     def compute_returns_and_advantage(
-        self, last_values, last_values_task, last_values_heuristic, dones
+        self, last_values_task, last_values_heuristic, dones
     ):
-        super().compute_returns_and_advantage(last_values, dones)
-
         # Convert to numpy
         last_values_task = last_values_task.clone().cpu(
         ).numpy().flatten()  # type: ignore[assignment]
@@ -98,7 +96,6 @@ class HEPOBuffer(RolloutBuffer):
         reward_task: np.ndarray,
         reward_heuristic: np.ndarray,
         episode_start: np.ndarray,
-        value: torch.Tensor,
         value_task: torch.Tensor,
         value_heuristic: torch.Tensor,
         log_prob: torch.Tensor,
@@ -114,7 +111,7 @@ class HEPOBuffer(RolloutBuffer):
             action=action,
             reward=reward,
             episode_start=episode_start,
-            value=value,
+            value=torch.zeros((self.n_envs,)),
             log_prob=log_prob,
         )
 
@@ -126,11 +123,9 @@ class HEPOBuffer(RolloutBuffer):
             _tensor_names = [
                 "observations",
                 "actions",
-                "values",
                 "values_task",
                 "values_heuristic",
                 "log_probs",
-                "advantages",
                 "advantages_task",
                 "advantages_heuristic",
                 "returns",
@@ -161,11 +156,9 @@ class HEPOBuffer(RolloutBuffer):
             self.observations[batch_inds],
             # Cast to float32 (backward compatible), this would lead to RuntimeError for MultiBinary space
             self.actions[batch_inds].astype(np.float32, copy=False),
-            self.values[batch_inds].flatten(),
             self.values_task[batch_inds].flatten(),
             self.values_heuristic[batch_inds].flatten(),
             self.log_probs[batch_inds].flatten(),
-            self.advantages[batch_inds].flatten(),
             self.advantages_task[batch_inds].flatten(),
             self.advantages_heuristic[batch_inds].flatten(),
             self.returns[batch_inds].flatten(),
@@ -178,11 +171,9 @@ class HEPOBuffer(RolloutBuffer):
 class HEPOBufferSamples(NamedTuple):
     observations: torch.Tensor
     actions: torch.Tensor
-    old_values: torch.Tensor
     old_values_task: torch.Tensor
     old_values_heuristic: torch.Tensor
     old_log_prob: torch.Tensor
-    advantages: torch.Tensor
     advantages_task: torch.Tensor
     advantages_heuristic: torch.Tensor
     returns: torch.Tensor

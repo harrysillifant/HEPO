@@ -50,7 +50,7 @@ class HEPOPolicy(ActorCriticPolicy):
             raise NotImplementedError(
                 f"Unsupported distribution '{self.action_dist}'.")
 
-        self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 3)
+        self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 2)
         # Init weights: use orthogonal initialization
         # with small initial weight for the output
         if self.ortho_init:

@@ -77,10 +77,9 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                 # type: ignore[arg-type]
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
                 actions, values, log_probs = self.policy(obs_tensor)
-                values, values_task, values_heuristic = (
+                values_task, values_heuristic = (
                     values[:, 0].reshape(-1, 1),
                     values[:, 1].reshape(-1, 1),
-                    values[:, 2].reshape(-1, 1),
                 )
             actions = actions.cpu().numpy()
 
@@ -136,11 +135,9 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                         terminal_value = self.policy.predict_values(
                             terminal_obs)[0]  # type: ignore[arg-type]
                         (
-                            terminal_value,
                             terminal_value_task,
                             terminal_value_heuristic,
-                        ) = terminal_value[0], terminal_value[1], terminal_value[2]
-                    rewards[idx] += self.gamma * terminal_value
+                        ) = terminal_value[0], terminal_value[1]
                     rewards_task[idx] += self.gamma * terminal_value_task
                     rewards_heuristic[idx] += self.gamma * \
                         terminal_value_heuristic
@@ -152,7 +149,6 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                 rewards_task,
                 rewards_heuristic,
                 self._last_episode_starts,  # type: ignore[arg-type]
-                values,
                 values_task,
                 values_heuristic,
                 log_probs,
@@ -165,14 +161,12 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
             # Compute value for the last timestep
             values = self.policy.predict_values(obs_as_tensor(
                 new_obs, self.device))  # type: ignore[arg-type]
-            values, values_task, values_heuristic = (
+            values_task, values_heuristic = (
                 values[:, 0].reshape(-1, 1),
                 values[:, 1].reshape(-1, 1),
-                values[:, 2].reshape(-1, 1),
             )
 
         rollout_buffer.compute_returns_and_advantage(
-            last_values=values,
             last_values_task=values_task,
             last_values_heuristic=values_heuristic,
             dones=dones,

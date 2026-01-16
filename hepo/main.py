@@ -28,7 +28,7 @@ if __name__ == "__main__":
     # )
     #
     model = HEPO(
-        "MlpPolicy", env1=env1, env2=env2, tensorboard_log="./hepovsppo7_tb_logs/"
+        "MlpPolicy", env1=env1, env2=env2, tensorboard_log="./hepovsppo8_tb_logs/"
     )
 
     model.learn(total_timesteps=500_000, progress_bar=False)
