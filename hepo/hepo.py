@@ -176,6 +176,8 @@ class HEPO:
         self.normalize_advantage = normalize_advantage
         self.target_kl = target_kl
 
+        self.alpha = 0
+
         if _init_setup_model:
             self._setup_model()
 
@@ -301,18 +303,25 @@ class HEPO:
                     # Convert discrete action from float to long
                     actions_piH = rollout_data_piH.actions.long().flatten()
 
-                values, log_prob_pi, entropy = self.pi.policy.evaluate_actions(
+                values_pi, log_prob_pi, entropy = self.pi.policy.evaluate_actions(
                     rollout_data_pi.observations, actions_pi
                 )
-                _, log_prob_piH, _ = self.pi.policy.evaluate_actions(
+                values_piH, log_prob_piH, _ = self.pi.policy.evaluate_actions(
                     rollout_data_piH.observations, actions_piH
                 )
-                values_task, values_heuristic = (
-                    values[:, 0].reshape(-1, 1),
-                    values[:, 1].reshape(-1, 1),
+                values_task_pi, values_heuristic_pi = (
+                    values_pi[:, 0].reshape(-1, 1),
+                    values_pi[:, 1].reshape(-1, 1),
                 )
-                values_task = values_task.flatten()
-                values_heuristic = values_heuristic.flatten()
+                values_task_piH, values_heuristic_piH = (
+                    values_piH[:, 0].reshape(-1, 1),
+                    values_piH[:, 1].reshape(-1, 1),
+                )
+
+                values_task_pi = values_task_pi.flatten()
+                values_heuristic_pi = values_heuristic_pi.flatten()
+                values_task_piH = values_task_piH.flatten()
+                values_heuristic_piH = values_heuristic_piH.flatten()
 
                 # Normalize advantage
                 advantages_task_pi = rollout_data_pi.advantages_task
@@ -352,19 +361,23 @@ class HEPO:
                 # )
                 # policy_loss = -torch.min(policy_loss_1, policy_loss_2).mean()
                 policy_loss_1_pi = (
-                    advantages_task_pi + advantages_heuristic_pi
+                    (1 + self.alpha) * advantages_task_pi +
+                    advantages_heuristic_pi
                 ) * ratio_pi
                 policy_loss_2_pi = (
-                    advantages_task_pi + advantages_heuristic_pi
+                    (1 + self.alpha) * advantages_task_pi +
+                    advantages_heuristic_pi
                 ) * torch.clamp(ratio_pi, 1 - clip_range, 1 + clip_range)
                 policy_loss_pi = - \
                     torch.min(policy_loss_1_pi, policy_loss_2_pi).mean()
 
                 policy_loss_1_piH = (
-                    advantages_task_piH + advantages_heuristic_piH
+                    (1 + self.alpha) * advantages_task_piH +
+                    advantages_heuristic_piH
                 ) * ratio_piH
                 policy_loss_2_piH = (
-                    advantages_task_piH + advantages_heuristic_piH
+                    (1 + self.alpha) * advantages_task_piH +
+                    advantages_heuristic_piH
                 ) * torch.clamp(ratio_piH, 1 - clip_range, 1 + clip_range)
                 policy_loss_piH = -torch.min(
                     policy_loss_1_piH, policy_loss_2_piH
@@ -381,34 +394,62 @@ class HEPO:
 
                 if self.clip_range_vf is None:
                     # No clipping
-                    values_pred_task = values_task
-                    values_pred_heuristic = values_heuristic
+                    values_pred_task_pi = values_task_pi
+                    values_pred_heuristic_pi = values_heuristic_pi
+                    values_pred_task_piH = values_task_piH
+                    values_pred_heuristic_piH = values_heuristic_piH
                 else:
                     # Clip the difference between old and new value
                     # NOTE: this depends on the reward scaling
-                    values_pred_task = rollout_data_pi.old_values_task + torch.clamp(
-                        values_task - rollout_data_pi.old_values_task,
+                    values_pred_task_pi = rollout_data_pi.old_values_task + torch.clamp(
+                        values_task_pi - rollout_data_pi.old_values_task,
                         -clip_range_vf,
                         clip_range_vf,
                     )
-                    values_pred_heuristic = (
+                    values_pred_heuristic_pi = (
                         rollout_data_pi.old_values_heuristic
                         + torch.clamp(
-                            values_heuristic - rollout_data_pi.old_values_heuristic,
+                            values_heuristic_pi - rollout_data_pi.old_values_heuristic,
+                            -clip_range_vf,
+                            clip_range_vf,
+                        )
+                    )
+
+                    # Is this off policy difference correct?
+                    values_pred_task_piH = (
+                        rollout_data_piH.old_values_task
+                        + torch.clamp(
+                            values_task_piH - rollout_data_piH.old_values_task,
+                            -clip_range_vf,
+                            clip_range_vf,
+                        )
+                    )
+                    values_pred_heuristic_piH = (
+                        rollout_data_piH.old_values_heuristic
+                        + torch.clamp(
+                            values_heuristic_piH - rollout_data_pi.old_values_heuristic,
                             -clip_range_vf,
                             clip_range_vf,
                         )
                     )
 
                 # Value loss using the TD(gae_lambda) target
-                value_loss_task = F.mse_loss(
-                    rollout_data_pi.returns_task, values_pred_task
+                value_loss_task_pi = F.mse_loss(
+                    rollout_data_pi.returns_task, values_pred_task_pi
                 )
-                value_loss_heuristic = F.mse_loss(
-                    rollout_data_pi.returns_heuristic, values_pred_heuristic
+                value_loss_heuristic_pi = F.mse_loss(
+                    rollout_data_pi.returns_heuristic, values_pred_heuristic_pi
                 )
-                value_losses_task.append(value_loss_task.item())
-                value_losses_heuristic.append(value_loss_heuristic.item())
+                # Again this off policy returns is sus
+                value_loss_task_piH = F.mse_loss(
+                    rollout_data_piH.returns_task, values_pred_task_piH
+                )
+                value_loss_heuristic_piH = F.mse_loss(
+                    rollout_data_piH.returns_heuristic, values_pred_heuristic_piH
+                )
+
+                value_losses_task.append(value_loss_task_pi.item())
+                value_losses_heuristic.append(value_loss_heuristic_pi.item())
 
                 # Entropy loss favor exploration
                 if entropy is None:
@@ -429,8 +470,13 @@ class HEPO:
                     policy_loss_pi
                     + policy_loss_piH
                     + self.pi.ent_coef * entropy_loss
-                    + self.pi.vf_coef *
-                    (value_loss_task + value_loss_heuristic)
+                    + self.pi.vf_coef
+                    * (
+                        value_loss_task_pi
+                        + value_loss_heuristic_pi
+                        + value_loss_task_piH
+                        + value_loss_heuristic_piH
+                    )
                 )
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
@@ -536,19 +582,26 @@ class HEPO:
                     # Convert discrete action from float to long
                     actions_piH = rollout_data_piH.actions.long().flatten()
 
-                _, log_prob_pi, _ = self.piH.policy.evaluate_actions(
+                values_pi, log_prob_pi, _ = self.piH.policy.evaluate_actions(
                     rollout_data_pi.observations, actions_pi
                 )
-                values, log_prob_piH, entropy = self.piH.policy.evaluate_actions(
+                values_piH, log_prob_piH, entropy = self.piH.policy.evaluate_actions(
                     rollout_data_piH.observations, actions_piH
                 )
 
-                values_task, values_heuristic = (
-                    values[:, 0].reshape(-1, 1),
-                    values[:, 1].reshape(-1, 1),
+                values_task_pi, values_heuristic_pi = (
+                    values_pi[:, 0].reshape(-1, 1),
+                    values_pi[:, 1].reshape(-1, 1),
                 )
-                values_task = values_task.flatten()
-                values_heuristic = values_heuristic.flatten()
+                values_task_piH, values_heuristic_piH = (
+                    values_piH[:, 0].reshape(-1, 1),
+                    values_piH[:, 1].reshape(-1, 1),
+                )
+
+                values_task_pi = values_task_pi.flatten()
+                values_heuristic_pi = values_heuristic_pi.flatten()
+                values_task_piH = values_task_piH.flatten()
+                values_heuristic_piH = values_heuristic_piH.flatten()
 
                 # Normalize advantage
                 advantages_heuristic_pi = rollout_data_pi.advantages_heuristic
@@ -599,38 +652,65 @@ class HEPO:
 
                 if self.clip_range_vf is None:
                     # No clipping
-                    values_pred_task = values_task
-                    values_pred_heuristic = values_heuristic
+                    values_pred_task_pi = values_task_pi
+                    values_pred_heuristic_pi = values_heuristic_pi
+                    values_pred_task_piH = values_task_piH
+                    values_pred_heuristic_piH = values_heuristic_piH
                 else:
                     # Clip the difference between old and new value
                     # NOTE: this depends on the reward scaling
-                    values_pred_task = rollout_data_piH.old_values_task + torch.clamp(
-                        values_task - rollout_data_piH.old_values_task,
+                    values_pred_task_pi = rollout_data_pi.old_values_task + torch.clamp(
+                        values_task_pi - rollout_data_pi.old_values_task,
                         -clip_range_vf,
                         clip_range_vf,
                     )
-                    values_pred_heuristic = (
-                        rollout_data_piH.old_values_heuristic
+                    values_pred_heuristic_pi = (
+                        rollout_data_pi.old_values_heuristic
                         + torch.clamp(
-                            values_heuristic - rollout_data_piH.old_values_heuristic,
+                            values_heuristic_pi - rollout_data_pi.old_values_heuristic,
                             -clip_range_vf,
                             clip_range_vf,
                         )
                     )
+                    values_pred_task_piH = (
+                        rollout_data_piH.old_values_task
+                        + torch.clamp(
+                            values_task_piH - rollout_data_piH.old_values_task,
+                            -clip_range_vf,
+                            clip_range_vf,
+                        )
+                    )
+                    values_pred_heuristic_piH = (
+                        rollout_data_piH.old_values_heuristic
+                        + torch.clamp(
+                            values_heuristic_piH
+                            - rollout_data_piH.old_values_heuristic,
+                            -clip_range_vf,
+                            clip_range_vf,
+                        )
+                    )
+
                 # Value loss using the TD(gae_lambda) target
-                value_loss_task = F.mse_loss(
-                    rollout_data_piH.returns_task, values_pred_task
+                value_loss_task_pi = F.mse_loss(
+                    rollout_data_pi.returns_task, values_pred_task_pi
                 )
-                value_loss_heuristic = F.mse_loss(
-                    rollout_data_piH.returns_heuristic, values_pred_heuristic
+                value_loss_heuristic_pi = F.mse_loss(
+                    rollout_data_pi.returns_heuristic, values_pred_heuristic_pi
                 )
-                value_losses_task.append(value_loss_task.item())
-                value_losses_heuristic.append(value_loss_heuristic.item())
+                value_loss_task_piH = F.mse_loss(
+                    rollout_data_piH.returns_task, values_pred_task_piH
+                )
+                value_loss_heuristic_piH = F.mse_loss(
+                    rollout_data_piH.returns_heuristic, values_pred_heuristic_piH
+                )
+
+                value_losses_task.append(value_loss_task_piH.item())
+                value_losses_heuristic.append(value_loss_heuristic_piH.item())
 
                 # Entropy loss favor exploration
                 if entropy is None:
                     # Approximate entropy when no analytical form
-                    entropy_loss = -torch.mean(-log_prob)
+                    entropy_loss = -torch.mean(-log_prob_piH)
                 else:
                     entropy_loss = -torch.mean(entropy)
 
@@ -640,8 +720,13 @@ class HEPO:
                     policy_loss_pi
                     + policy_loss_piH
                     + self.piH.ent_coef * entropy_loss
-                    + self.piH.vf_coef *
-                    (value_loss_task + value_loss_heuristic)
+                    + self.piH.vf_coef
+                    * (
+                        value_loss_task_pi
+                        + value_loss_heuristic_pi
+                        + value_loss_task_piH
+                        + value_loss_heuristic_piH
+                    )
                 )
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
@@ -709,3 +794,33 @@ class HEPO:
         self.piH.logger.record("train/clip_range", clip_range)
         if self.clip_range_vf is not None:
             self.piH.logger.record("train/clip_range_vf", clip_range_vf)
+
+    def update_alpha(self):
+        grads = []
+        alphas = []
+        for epoch in range(self.n_epochs):
+            for rollout_data_pi, rollout_data_piH in zip(
+                self.pi.rollout_buffer.get(self.batch_size),
+                self.piH.rollout_buffer.get(self.batch_size),
+            ):
+                advantages_task_pi = rollout_data_pi.advantages_task
+                advantages_task_piH = rollout_data_piH.advantages_task
+
+                if (
+                    self.normalize_advantage
+                    and len(advantages_task_pi) > 1
+                    and len(advantages_task_piH) > 1
+                ):
+                    advantages_task_pi = (
+                        advantages_task_pi - advantages_task_pi.mean()
+                    ) / (advantages_task_pi.std() + 1e-8)
+
+                    advantages_task_piH = (
+                        advantages_task_piH - advantages_task_piH.mean()
+                    ) / (advantages_task_piH.std() + 1e-8)
+
+                # THESE ARE SUPPOSED TO BE OFF-POLICY ADVANTAGES
+
+                self.alpha = self.alpha - self.lr / 2 * (
+                    advantages_task_pi.mean() + advantages_task_piH.mean()
+                )

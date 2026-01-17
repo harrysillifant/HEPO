@@ -6,8 +6,7 @@ import time
 
 vec_env = make_vec_env("LunarLander-v3", n_envs=4, seed=42)
 
-model = PPO("MlpPolicy", vec_env, verbose=1,
-            tensorboard_log="./hepovsppo8_tb_logs/")
+model = PPO("MlpPolicy", vec_env, verbose=1, tensorboard_log="./hepovsppo8_tb_logs/")
 
 # eval_env = make_vec_env("LunarLander-v3", n_envs=1)
 # eval_callback = EvalCallback(
