@@ -50,6 +50,7 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
         callback: BaseCallback,
         rollout_buffer: RolloutBuffer,
         n_rollout_steps: int,
+        off_policy,
     ):
         assert self._last_obs is not None, "No previous observation was provided"
         # Switch to eval mode (this affects batch norm / dropout)
@@ -80,6 +81,11 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                 values_task, values_heuristic = (
                     values[:, 0].reshape(-1, 1),
                     values[:, 1].reshape(-1, 1),
+                )
+                _, values_off_policy, _ = off_policy.policy(obs_tensor)
+                values_task_off_policy, values_heuristic_off_policy = (
+                    values_off_policy[:, 0].reshape(-1, 1),
+                    values_off_policy[:, 1].reshape(-1, 1),
                 )
             actions = actions.cpu().numpy()
 
@@ -151,6 +157,8 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                 self._last_episode_starts,  # type: ignore[arg-type]
                 values_task,
                 values_heuristic,
+                values_task_off_policy,
+                values_heuristic_off_policy,
                 log_probs,
             )
 
@@ -165,10 +173,19 @@ class HEPOAlgorithm(OnPolicyAlgorithm):
                 values[:, 0].reshape(-1, 1),
                 values[:, 1].reshape(-1, 1),
             )
+            values_off_policy = off_policy.policy.predict_values(
+                obs_as_tensor(new_obs, self.device)
+            )
+            values_task_off_policy, values_heuristic_off_policy = (
+                values_off_policy[:, 0].reshape(-1, 1),
+                values_off_policy[:, 1].reshape(-1, 1),
+            )
 
         rollout_buffer.compute_returns_and_advantage(
             last_values_task=values_task,
             last_values_heuristic=values_heuristic,
+            last_values_task_off_policy=values_task_off_policy,
+            last_values_heuristic_off_policy=values_heuristic_off_policy,
             dones=dones,
         )
 

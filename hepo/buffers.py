@@ -13,30 +13,58 @@ class HEPOBuffer(RolloutBuffer):
     def reset(self):
         self.rewards_task = np.zeros(
             (self.buffer_size, self.n_envs), dtype=np.float32)
-
         self.rewards_heuristic = np.zeros(
             (self.buffer_size, self.n_envs), dtype=np.float32
         )
+
         self.returns_task = np.zeros(
             (self.buffer_size, self.n_envs), dtype=np.float32)
         self.returns_heuristic = np.zeros(
             (self.buffer_size, self.n_envs), dtype=np.float32
         )
+
+        self.returns_task_off_policy = np.zeros(
+            (self.buffer_size, self.n_envs), dtype=np.float32
+        )
+        self.returns_heuristic_off_policy = np.zeros(
+            (self.buffer_size, self.n_envs), dtype=np.float32
+        )
+
         self.values_task = np.zeros(
             (self.buffer_size, self.n_envs), dtype=np.float32)
         self.values_heuristic = np.zeros(
             (self.buffer_size, self.n_envs), dtype=np.float32
         )
+
+        self.values_task_off_policy = np.zeros(
+            (self.buffer_size, self.n_envs), dtype=np.float32
+        )
+        self.values_heuristic_off_policy = np.zeros(
+            (self.buffer_size, self.n_envs), dtype=np.float32
+        )
+
         self.advantages_task = np.zeros(
             (self.buffer_size, self.n_envs), dtype=np.float32
         )
         self.advantages_heuristic = np.zeros(
             (self.buffer_size, self.n_envs), dtype=np.float32
         )
+
+        self.advantages_task_off_policy = np.zeros(
+            (self.buffer_size, self.n_envs), dtype=np.float32
+        )
+        self.advantages_heuristic_off_policy = np.zeros(
+            (self.buffer_size, self.n_envs), dtype=np.float32
+        )
         super().reset()
 
     def compute_returns_and_advantage(
-        self, last_values_task, last_values_heuristic, dones
+        self,
+        last_values_task,
+        last_values_heuristic,
+        last_values_task_off_policy,
+        last_values_heuristic_off_policy,
+        dones,
     ):
         # Convert to numpy
         last_values_task = last_values_task.clone().cpu(
@@ -88,6 +116,62 @@ class HEPOBuffer(RolloutBuffer):
         # in David Silver Lecture 4: https://www.youtube.com/watch?v=PnHCvfgC_ZA
         self.returns_heuristic = self.advantages_heuristic + self.values_heuristic
 
+        last_values_task_off_policy = (
+            last_values_task_off_policy.clone().cpu().numpy().flatten()
+        )
+
+        last_gae_lam = 0
+        for step in reversed(range(self.buffer_size)):
+            if step == self.buffer_size - 1:
+                next_non_terminal = 1.0 - dones.astype(np.float32)
+                next_values = last_values_task_off_policy
+            else:
+                next_non_terminal = 1.0 - self.episode_starts[step + 1]
+                next_values = self.values_task_off_policy[step + 1]
+            delta = (
+                self.rewards_task[step]
+                + self.gamma * next_values * next_non_terminal
+                - self.values_task_off_policy[step]
+            )
+            last_gae_lam = (
+                delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam
+            )
+            self.advantages_task_off_policy[step] = last_gae_lam
+        # TD(lambda) estimator, see Github PR #375 or "Telescoping in TD(lambda)"
+        # in David Silver Lecture 4: https://www.youtube.com/watch?v=PnHCvfgC_ZA
+        self.returns_task_off_policy = (
+            self.advantages_task_off_policy + self.values_task_off_policy
+        )
+
+        # Convert to numpy
+        last_values_heuristic_off_policy = (
+            last_values_heuristic_off_policy.clone().cpu().numpy().flatten()
+        )  # type: ignore[assignment]
+
+        last_gae_lam = 0
+        for step in reversed(range(self.buffer_size)):
+            if step == self.buffer_size - 1:
+                next_non_terminal = 1.0 - dones.astype(np.float32)
+                next_values = last_values_heuristic_off_policy
+            else:
+                next_non_terminal = 1.0 - self.episode_starts[step + 1]
+                next_values = self.values_heuristic_off_policy[step + 1]
+            delta = (
+                self.rewards_heuristic[step]
+                + self.gamma * next_values * next_non_terminal
+                - self.values_heuristic_off_policy[step]
+            )
+            last_gae_lam = (
+                delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam
+            )
+            self.advantages_heuristic_off_policy[step] = last_gae_lam
+
+        # TD(lambda) estimator, see Github PR #375 or "Telescoping in TD(lambda)"
+        # in David Silver Lecture 4: https://www.youtube.com/watch?v=PnHCvfgC_ZA
+        self.returns_heuristic_off_policy = (
+            self.advantages_heuristic_off_policy + self.values_heuristic_off_policy
+        )
+
     def add(
         self,
         obs: np.ndarray,
@@ -98,6 +182,8 @@ class HEPOBuffer(RolloutBuffer):
         episode_start: np.ndarray,
         value_task: torch.Tensor,
         value_heuristic: torch.Tensor,
+        value_task_off_policy: torch.Tensor,
+        value_heuristic_off_policy: torch.Tensor,
         log_prob: torch.Tensor,
     ):
         self.rewards_task[self.pos] = np.array(reward_task)
@@ -105,6 +191,12 @@ class HEPOBuffer(RolloutBuffer):
         self.values_task[self.pos] = value_task.clone().cpu().numpy().flatten()
         self.values_heuristic[self.pos] = (
             value_heuristic.clone().cpu().numpy().flatten()
+        )
+        self.values_task_off_policy[self.pos] = (
+            value_task_off_policy.clone().cpu().numpy().flatten()
+        )
+        self.values_heuristic_off_policy[self.pos] = (
+            value_heuristic_off_policy.clone().cpu().numpy().flatten()
         )
         super().add(
             obs=obs,
@@ -125,12 +217,17 @@ class HEPOBuffer(RolloutBuffer):
                 "actions",
                 "values_task",
                 "values_heuristic",
+                "values_task_off_policy",
+                "values_heuristic_off_policy",
                 "log_probs",
                 "advantages_task",
                 "advantages_heuristic",
+                "advantages_task_off_policy",
                 "returns",
                 "returns_task",
                 "returns_heuristic",
+                "returns_task_off_policy",
+                "returns_heuristic_off_policy",
             ]
 
             for tensor in _tensor_names:
@@ -158,12 +255,17 @@ class HEPOBuffer(RolloutBuffer):
             self.actions[batch_inds].astype(np.float32, copy=False),
             self.values_task[batch_inds].flatten(),
             self.values_heuristic[batch_inds].flatten(),
+            self.values_task_off_policy[batch_inds].flatten(),
+            self.values_heuristic_off_policy[batch_inds].flatten(),
             self.log_probs[batch_inds].flatten(),
             self.advantages_task[batch_inds].flatten(),
             self.advantages_heuristic[batch_inds].flatten(),
+            self.advantages_task_off_policy[batch_inds].flatten(),
             self.returns[batch_inds].flatten(),
             self.returns_task[batch_inds].flatten(),
             self.returns_heuristic[batch_inds].flatten(),
+            self.returns_task_off_policy[batch_inds].flatten(),
+            self.returns_heuristic_off_policy[batch_inds].flatten(),
         )
         return HEPOBufferSamples(*tuple(map(self.to_torch, data)))
 
@@ -173,9 +275,14 @@ class HEPOBufferSamples(NamedTuple):
     actions: torch.Tensor
     old_values_task: torch.Tensor
     old_values_heuristic: torch.Tensor
+    old_values_task_off_policy: torch.Tensor
+    old_values_heuristic_off_policy: torch.Tensor
     old_log_prob: torch.Tensor
     advantages_task: torch.Tensor
     advantages_heuristic: torch.Tensor
+    advantages_task_off_policy: torch.Tensor
     returns: torch.Tensor
     returns_task: torch.Tensor
     returns_heuristic: torch.Tensor
+    returns_task_off_policy: torch.Tensor
+    returns_heuristic_off_policy: torch.Tensor

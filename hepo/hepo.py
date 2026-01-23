@@ -26,9 +26,11 @@ class HEPO:
         env1,
         env2,
         learning_rate=3e-4,
+        learning_rate_alpha=1e-2,
         n_steps=2048,
         batch_size=64,
         n_epochs=10,
+        n_epochs_alpha=10,
         gamma=0.99,
         gae_lambda=0.95,
         clip_range=0.2,
@@ -171,12 +173,14 @@ class HEPO:
 
         self.batch_size = batch_size
         self.n_epochs = n_epochs
+        self.n_epochs_alpha = n_epochs_alpha
         self.clip_range = clip_range
         self.clip_range_vf = clip_range_vf
         self.normalize_advantage = normalize_advantage
         self.target_kl = target_kl
 
         self.alpha = 0
+        self.lr_alpha = learning_rate_alpha
 
         if _init_setup_model:
             self._setup_model()
@@ -231,12 +235,14 @@ class HEPO:
                 pi_callback,
                 self.pi.rollout_buffer,
                 n_rollout_steps=self.pi.n_steps,
+                off_policy=self.piH,
             )
             piH_continue_training = self.piH.collect_rollouts(
                 self.piH.env,
                 piH_callback,
                 self.piH.rollout_buffer,
                 n_rollout_steps=self.piH.n_steps,
+                off_policy=self.pi,
             )
 
             if not pi_continue_training:
@@ -261,6 +267,7 @@ class HEPO:
 
             self.train_pi()
             self.train_piH()
+            self.update_alpha()
 
         pi_callback.on_training_end()
         piH_callback.on_training_end()
@@ -417,17 +424,19 @@ class HEPO:
 
                     # Is this off policy difference correct?
                     values_pred_task_piH = (
-                        rollout_data_piH.old_values_task
+                        rollout_data_piH.old_values_task_off_policy
                         + torch.clamp(
-                            values_task_piH - rollout_data_piH.old_values_task,
+                            values_task_piH
+                            - rollout_data_piH.old_values_task_off_policy,
                             -clip_range_vf,
                             clip_range_vf,
                         )
                     )
                     values_pred_heuristic_piH = (
-                        rollout_data_piH.old_values_heuristic
+                        rollout_data_piH.old_values_heuristic_off_policy
                         + torch.clamp(
-                            values_heuristic_piH - rollout_data_pi.old_values_heuristic,
+                            values_heuristic_piH
+                            - rollout_data_pi.old_values_heuristic_off_policy,
                             -clip_range_vf,
                             clip_range_vf,
                         )
@@ -442,10 +451,11 @@ class HEPO:
                 )
                 # Again this off policy returns is sus
                 value_loss_task_piH = F.mse_loss(
-                    rollout_data_piH.returns_task, values_pred_task_piH
+                    rollout_data_piH.returns_task_off_policy, values_pred_task_piH
                 )
                 value_loss_heuristic_piH = F.mse_loss(
-                    rollout_data_piH.returns_heuristic, values_pred_heuristic_piH
+                    rollout_data_piH.returns_heuristic_off_policy,
+                    values_pred_heuristic_piH,
                 )
 
                 value_losses_task.append(value_loss_task_pi.item())
@@ -544,6 +554,9 @@ class HEPO:
             "train/n_updates", self.pi._n_updates, exclude="tensorboard"
         )
         self.pi.logger.record("train/clip_range", clip_range)
+
+        self.pi.logger.record("train/alpha", self.alpha)
+
         if self.clip_range_vf is not None:
             self.pi.logger.record("train/clip_range_vf", clip_range_vf)
 
@@ -673,18 +686,19 @@ class HEPO:
                         )
                     )
                     values_pred_task_piH = (
-                        rollout_data_piH.old_values_task
+                        rollout_data_piH.old_values_task_off_policy
                         + torch.clamp(
-                            values_task_piH - rollout_data_piH.old_values_task,
+                            values_task_piH
+                            - rollout_data_piH.old_values_task_off_policy,
                             -clip_range_vf,
                             clip_range_vf,
                         )
                     )
                     values_pred_heuristic_piH = (
-                        rollout_data_piH.old_values_heuristic
+                        rollout_data_piH.old_values_heuristic_off_policy
                         + torch.clamp(
                             values_heuristic_piH
-                            - rollout_data_piH.old_values_heuristic,
+                            - rollout_data_piH.old_values_heuristic_off_policy,
                             -clip_range_vf,
                             clip_range_vf,
                         )
@@ -698,10 +712,11 @@ class HEPO:
                     rollout_data_pi.returns_heuristic, values_pred_heuristic_pi
                 )
                 value_loss_task_piH = F.mse_loss(
-                    rollout_data_piH.returns_task, values_pred_task_piH
+                    rollout_data_piH.returns_task_off_policy, values_pred_task_piH
                 )
                 value_loss_heuristic_piH = F.mse_loss(
-                    rollout_data_piH.returns_heuristic, values_pred_heuristic_piH
+                    rollout_data_piH.returns_heuristic_off_policy,
+                    values_pred_heuristic_piH,
                 )
 
                 value_losses_task.append(value_loss_task_piH.item())
@@ -796,31 +811,23 @@ class HEPO:
             self.piH.logger.record("train/clip_range_vf", clip_range_vf)
 
     def update_alpha(self):
-        grads = []
-        alphas = []
-        for epoch in range(self.n_epochs):
+        for epoch in range(self.n_epochs_alpha):
             for rollout_data_pi, rollout_data_piH in zip(
-                self.pi.rollout_buffer.get(self.batch_size),
-                self.piH.rollout_buffer.get(self.batch_size),
+                self.pi.rollout_buffer.get(self.pi.rollout_buffer.buffer_size),
+                self.piH.rollout_buffer.get(
+                    self.piH.rollout_buffer.buffer_size),
             ):
-                advantages_task_pi = rollout_data_pi.advantages_task
-                advantages_task_piH = rollout_data_piH.advantages_task
-
-                if (
-                    self.normalize_advantage
-                    and len(advantages_task_pi) > 1
-                    and len(advantages_task_piH) > 1
-                ):
-                    advantages_task_pi = (
-                        advantages_task_pi - advantages_task_pi.mean()
-                    ) / (advantages_task_pi.std() + 1e-8)
-
-                    advantages_task_piH = (
-                        advantages_task_piH - advantages_task_piH.mean()
-                    ) / (advantages_task_piH.std() + 1e-8)
-
-                # THESE ARE SUPPOSED TO BE OFF-POLICY ADVANTAGES
-
-                self.alpha = self.alpha - self.lr / 2 * (
-                    advantages_task_pi.mean() + advantages_task_piH.mean()
+                advantages_pi_on_piH_rollouts = (
+                    rollout_data_piH.advantages_task_off_policy
+                )
+                advantages_piH_on_pi_rollouts = (
+                    rollout_data_pi.advantages_task_off_policy
+                )
+                self.alpha = (
+                    self.alpha
+                    - (self.lr_alpha * 2)
+                    * (
+                        advantages_piH_on_pi_rollouts.mean()
+                        - advantages_pi_on_piH_rollouts.mean()
+                    ).item()
                 )
