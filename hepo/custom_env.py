@@ -14,8 +14,7 @@ class VectorizedRewardSplitWrapper(VecEnvWrapper):
 
     def step_wait(self):
         """
-        Figure out if obs is heuristic or task
-        Put task and heuristic rewards into info dict
+        Puts task and heuristic rewards into info dict
         """
         obs, rewards, dones, infos = self.venv.step_wait()
         for i in range(self.num_envs):
