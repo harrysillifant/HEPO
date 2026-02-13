@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import time
 from collections import deque
 import warnings
+import math
 
 from stable_baselines3.common.utils import explained_variance
 from stable_baselines3.common.callbacks import (
@@ -121,26 +122,26 @@ class HEPO:
             buffer_size = self.pi.env.num_envs * self.pi.n_steps
             assert buffer_size > 1 or (
                 not normalize_advantage
-            ), f"`n_steps * n_envs` must be greater than 1. Currently n_steps={
+            ), f"""`n_steps * n_envs` must be greater than 1. Currently n_steps={
                 self.pi.n_steps
-            } and n_envs={self.pi.env.num_envs}"
+            } and n_envs={self.pi.env.num_envs}"""
             # Check that the rollout buffer size is a multiple of the mini-batch size
             untruncated_batches = buffer_size // batch_size
             if buffer_size % batch_size > 0:
                 warnings.warn(
                     f"You have specified a mini-batch size of {batch_size},"
-                    f" but because the `RolloutBuffer` is of size `n_steps * n_envs = {
+                    f""" but because the `RolloutBuffer` is of size `n_steps * n_envs = {
                         buffer_size
-                    }`,"
-                    f" after every {
-                        untruncated_batches} untruncated mini-batches,"
-                    f" there will be a truncated mini-batch of size {
+                    }`,"""
+                    f""" after every {untruncated_batches}
+                        untruncated mini-batches,"""
+                    f""" there will be a truncated mini-batch of size {
                         buffer_size % batch_size
-                    }\n"
+                    }\n"""
                     f"We recommend using a `batch_size` that is a factor of `n_steps * n_envs`.\n"
-                    f"Info: (n_steps={self.pi.n_steps} and n_envs={
+                    f"""Info: (n_steps={self.pi.n_steps} and n_envs={
                         self.pi.env.num_envs
-                    })"
+                    })"""
                 )
 
         if self.piH.env is not None:
@@ -149,26 +150,26 @@ class HEPO:
             buffer_size = self.piH.env.num_envs * self.piH.n_steps
             assert buffer_size > 1 or (
                 not normalize_advantage
-            ), f"`n_steps * n_envs` must be greater than 1. Currently n_steps={
+            ), f"""`n_steps * n_envs` must be greater than 1. Currently n_steps={
                 self.piH.n_steps
-            } and n_envs={self.piH.env.num_envs}"
+            } and n_envs={self.piH.env.num_envs}"""
             # Check that the rollout buffer size is a multiple of the mini-batch size
             untruncated_batches = buffer_size // batch_size
             if buffer_size % batch_size > 0:
                 warnings.warn(
                     f"You have specified a mini-batch size of {batch_size},"
-                    f" but because the `RolloutBuffer` is of size `n_steps * n_envs = {
+                    f""" but because the `RolloutBuffer` is of size `n_steps * n_envs = {
                         buffer_size
-                    }`,"
-                    f" after every {
-                        untruncated_batches} untruncated mini-batches,"
-                    f" there will be a truncated mini-batch of size {
+                    }`,"""
+                    f""" after every {untruncated_batches}
+                        untruncated mini-batches,"""
+                    f""" there will be a truncated mini-batch of size {
                         buffer_size % batch_size
-                    }\n"
+                    }\n"""
                     f"We recommend using a `batch_size` that is a factor of `n_steps * n_envs`.\n"
-                    f"Info: (n_steps={self.piH.n_steps} and n_envs={
+                    f"""Info: (n_steps={self.piH.n_steps} and n_envs={
                         self.piH.env.num_envs
-                    })"
+                    })"""
                 )
 
         self.batch_size = batch_size
@@ -367,24 +368,29 @@ class HEPO:
                 #     ratio, 1 - clip_range, 1 + clip_range
                 # )
                 # policy_loss = -torch.min(policy_loss_1, policy_loss_2).mean()
+
+                coef = (math.e ** (1 + self.alpha)) / (
+                    math.e + math.e ** (1 + self.alpha)
+                )
+
                 policy_loss_1_pi = (
-                    (1 + self.alpha) * advantages_task_pi +
-                    advantages_heuristic_pi
+                    coef * advantages_task_pi +
+                    (1 - coef) * advantages_heuristic_pi
                 ) * ratio_pi
                 policy_loss_2_pi = (
-                    (1 + self.alpha) * advantages_task_pi +
-                    advantages_heuristic_pi
+                    coef * advantages_task_pi +
+                    (1 - coef) * advantages_heuristic_pi
                 ) * torch.clamp(ratio_pi, 1 - clip_range, 1 + clip_range)
                 policy_loss_pi = - \
                     torch.min(policy_loss_1_pi, policy_loss_2_pi).mean()
 
                 policy_loss_1_piH = (
-                    (1 + self.alpha) * advantages_task_piH +
-                    advantages_heuristic_piH
+                    coef * advantages_task_piH +
+                    (1 - coef) * advantages_heuristic_piH
                 ) * ratio_piH
                 policy_loss_2_piH = (
-                    (1 + self.alpha) * advantages_task_piH +
-                    advantages_heuristic_piH
+                    coef * advantages_task_piH +
+                    (1 - coef) * advantages_heuristic_piH
                 ) * torch.clamp(ratio_piH, 1 - clip_range, 1 + clip_range)
                 policy_loss_piH = -torch.min(
                     policy_loss_1_piH, policy_loss_2_piH

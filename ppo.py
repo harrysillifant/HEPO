@@ -4,10 +4,10 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.callbacks import EvalCallback
 import time
 
-vec_env = make_vec_env("LunarLander-v3", n_envs=4, seed=42)
+vec_env = make_vec_env("BipedalWalker-v3", n_envs=4, seed=42)
 
 model = PPO("MlpPolicy", vec_env, verbose=1,
-            tensorboard_log="./hepovsppo10_tb_logs/")
+            tensorboard_log="./bipedal2_tb_logs/")
 
 # eval_env = make_vec_env("LunarLander-v3", n_envs=1)
 # eval_callback = EvalCallback(

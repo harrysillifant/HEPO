@@ -4,15 +4,25 @@ from stable_baselines3.common.vec_env import VecEnvWrapper, VecEnv
 
 from hepo import HEPO
 from custom_env import VectorizedRewardSplitWrapper
-from predicates import LunarLander_predicate
+from predicates import LunarLander_predicate, BipedalWalker_predicate
 
 
 if __name__ == "__main__":
+    # env1 = VectorizedRewardSplitWrapper(
+    #     make_vec_env("LunarLander-v3", n_envs=4),
+    #     task_predicate=LunarLander_predicate(),
+    # )
+    # env2 = VectorizedRewardSplitWrapper(
+    #     make_vec_env("LunarLander-v3", n_envs=4),
+    #     task_predicate=LunarLander_predicate(),
+    # )
     env1 = VectorizedRewardSplitWrapper(
-        make_vec_env("LunarLander-v3", n_envs=4), task_predicate=LunarLander_predicate()
+        make_vec_env("BipedalWalker-v3", n_envs=4),
+        task_predicate=BipedalWalker_predicate(),
     )
     env2 = VectorizedRewardSplitWrapper(
-        make_vec_env("LunarLander-v3", n_envs=4), task_predicate=LunarLander_predicate()
+        make_vec_env("BipedalWalker-v3", n_envs=4),
+        task_predicate=BipedalWalker_predicate(),
     )
 
     # eval_env = VectorizedRewardSplitWrapper(
@@ -28,7 +38,7 @@ if __name__ == "__main__":
     # )
     #
     model = HEPO(
-        "MlpPolicy", env1=env1, env2=env2, tensorboard_log="./hepovsppo10_tb_logs/"
+        "MlpPolicy", env1=env1, env2=env2, tensorboard_log="./bipedal_tb_logs/"
     )
 
-    model.learn(total_timesteps=500_000, progress_bar=False)
+    model.learn(total_timesteps=500_000, progress_bar=True)
