@@ -35,6 +35,7 @@ parser.add_argument("--num_envs", default=4, type=int)
 parser.add_argument("--learning_rate", default=3e-5, type=float)
 parser.add_argument("--max_steps", default=20000000, type=int)
 parser.add_argument("--wandb_entity", default="robot-learning", type=str)
+parser.add_argument("--device", default="auto", type=str)
 ARGS = parser.parse_args()
 
 
@@ -192,6 +193,7 @@ def main(argv):
         # tensorboard_log=f"runs/{run.id}",
         learning_rate=float(ARGS.learning_rate),
         batch_size=512,
+        device=ARGS.device,
     )
 
     model.learn(
