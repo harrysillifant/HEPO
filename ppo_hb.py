@@ -1,5 +1,6 @@
 import argparse
 
+from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.vec_env import (
@@ -7,11 +8,6 @@ from stable_baselines3.common.vec_env import (
     SubprocVecEnv,
     VecVideoRecorder,
 )
-
-from hepo.hepo import HEPO
-from hepo.custom_env import VecEnvRewardSplitWrapper
-from hepo.predicates import predicate_h1hand_sit_simple_v0
-
 
 import gymnasium as gym
 
@@ -35,6 +31,7 @@ parser.add_argument("--num_envs", default=4, type=int)
 parser.add_argument("--learning_rate", default=3e-5, type=float)
 parser.add_argument("--max_steps", default=20000000, type=int)
 parser.add_argument("--wandb_entity", default="robot-learning", type=str)
+parser.add_argument("--device", default="auto", type=str)
 ARGS = parser.parse_args()
 
 
@@ -63,7 +60,7 @@ class EvalCallback(BaseCallback):
         super(EvalCallback, self).__init__(verbose=verbose)
 
         self.eval_every = eval_every
-        self.eval_env = VecEnvRewardSplitWrapper(DummyVecEnv([make_env(1)]))
+        self.eval_env = DummyVecEnv([make_env(1)])
 
     def _on_step(self) -> bool:
         if self.num_timesteps % self.eval_every == 0:
@@ -163,36 +160,29 @@ class EpisodeLogCallback(BaseCallback):
 
 
 def main(argv):
-    env1 = VecEnvRewardSplitWrapper(
-        SubprocVecEnv([make_env(i) for i in range(ARGS.num_envs)]),
-        predicate=predicate_h1hand_sit_simple_v0(),
-    )
-    env2 = VecEnvRewardSplitWrapper(
-        SubprocVecEnv([make_env(i) for i in range(ARGS.num_envs)]),
-        predicate=predicate_h1hand_sit_simple_v0(),
-    )
+    env = SubprocVecEnv([make_env(i) for i in range(ARGS.num_envs)])
 
     steps = 1000
 
     run = wandb.init(
         entity=ARGS.wandb_entity,
         project="humanoid-bench",
-        name=f"hepo_{ARGS.env_name}",
+        name=f"ppo_{ARGS.env_name}",
         sync_tensorboard=True,  # auto-upload sb3's tensorboard metrics
         monitor_gym=True,  # auto-upload the videos of agents playing the game
         save_code=True,  # optional
     )
 
-    model = HEPO(
+    model = PPO(
         "MlpPolicy",
-        env1=env1,
-        env2=env2,
+        env,
         verbose=1,
         tensorboard_log=f"runs/{ARGS.name}",
-        # tensorboard_log=f"runs/{run.id}",
         learning_rate=float(ARGS.learning_rate),
         batch_size=512,
+        device=ARGS.device,
     )
+
     model.learn(
         total_timesteps=ARGS.max_steps,
         log_interval=1,
@@ -204,7 +194,7 @@ def main(argv):
         ],
     )
 
-    # model.save("hepo")
+    # model.save("ppo")
     print("Training finished")
 
 
