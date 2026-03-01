@@ -11,4 +11,6 @@
 
 source /home/hcs/.bashrc
 
+export WANDB_MODE=offline
+
 uv run ppo_hb.py --seed 0 --env_name h1hand-sit_simple-v0 --device cuda --num_envs 32 --name engaging_long_test
